@@ -23,7 +23,61 @@ import streamlit as st
 
 import db
 
-st.set_page_config(page_title="AE Utilization Tracker", layout="wide")
+st.set_page_config(page_title="AE Utilization Tracker", layout="wide", page_icon="📊")
+
+# --- Global styling ---------------------------------------------------------
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }
+
+      .sess-card {
+        border-radius: 12px;
+        padding: 14px 18px;
+        margin-bottom: 10px;
+        border: 1px solid transparent;
+        transition: transform .08s ease, box-shadow .08s ease;
+      }
+      .sess-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+
+      .sess-available {
+        background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        border-color: #fcd34d;
+      }
+      .sess-claimed {
+        background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+        border-color: #6ee7b7;
+      }
+
+      .sess-name { font-size: 1.02rem; font-weight: 700; color: #1e293b; }
+      .sess-meta { font-size: 0.82rem; color: #475569; margin-top: 3px; }
+      .sess-batch {
+        display: inline-block; font-size: 0.72rem; font-weight: 600;
+        background: rgba(255,255,255,.7); color: #334155;
+        padding: 1px 8px; border-radius: 999px; margin-left: 6px;
+      }
+      .sess-prog {
+        display:inline-block; font-size:0.72rem; font-weight:600;
+        background: rgba(99,102,241,.12); color:#4338ca;
+        padding: 1px 8px; border-radius: 999px;
+      }
+      .badge {
+        display:inline-block; font-size:0.74rem; font-weight:700;
+        padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+      }
+      .badge-available { background:#fde68a; color:#92400e; }
+      .badge-selected  { background:#a7f3d0; color:#065f46; }
+      .badge-confirmed { background:#34d399; color:#053d2e; }
+      .badge-choosing  { background:#fed7aa; color:#9a3412; }
+
+      div[data-testid="stMetric"] {
+        background: #f8fafc; border: 1px solid #e2e8f0;
+        border-radius: 10px; padding: 12px 14px;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 STATUS_OPTIONS = ["Not Selected", "Choosing", "Selected", "Confirmed"]
 CLAIMED = {"Selected", "Confirmed"}
@@ -77,7 +131,12 @@ def dashboard():
         cmis_ok, app_ok = db.ping()
         st.caption(f"CMIS DB: {'🟢' if cmis_ok else '🔴'}  ·  App DB: {'🟢' if app_ok else '🔴'}")
 
-    st.title("Extended AE Utilization Tracker")
+    st.markdown(
+        "<h1 style='margin-bottom:0'>Extended AE Utilization Tracker</h1>"
+        "<p style='color:#64748b;margin-top:4px;font-size:0.95rem'>"
+        "Faculty observation scheduling · live from CMIS + Anudip AE Team DB</p>",
+        unsafe_allow_html=True,
+    )
 
     # --- Step 1: week + Core AE selection ---
     c1, c2 = st.columns(2)
@@ -138,45 +197,69 @@ def _session_key(r) -> str:
     return f"{r['s_date']}|{r['slot_time']}|{r.get('batch_code','')}"
 
 
+def _badge(status: str, claimed: bool) -> str:
+    if status == "Confirmed":
+        return '<span class="badge badge-confirmed">✓ Confirmed</span>'
+    if status == "Selected":
+        return '<span class="badge badge-selected">✓ Selected</span>'
+    if status == "Choosing":
+        return '<span class="badge badge-choosing">⏳ Choosing</span>'
+    return '<span class="badge badge-available">◷ Available</span>'
+
+
 def _sessions_table(sessions, core_ae_email, week_start, week_end, role, user_email):
-    st.subheader("Aligned Sessions — Faculty × Core AE × Extended AE")
-    st.caption("Yellow = available for observation · Green = claimed (Selected/Confirmed)")
+    st.markdown("### Aligned Sessions")
+    st.caption("Each card is a faculty session. **Yellow** = available to observe · **Green** = claimed by an Extended AE.")
 
     is_extended = role == "extended_ae"
 
-    # existing selections for this extended AE (to know green + current status)
     my_sel = db.get_selections(user_email if is_extended else None, week_start, week_end)
     sel_lookup = {}
     for _, s in my_sel.iterrows():
         sel_lookup[f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"] = s["status"]
 
-    st.write(f"**{len(sessions)} sessions**")
+    # summary metric strip
+    total = len(sessions)
+    claimed_count = sum(
+        1 for _, r in sessions.iterrows()
+        if sel_lookup.get(f"{r['s_date']}|{r['slot_time']}|{r['batch_code'] or ''}", "Not Selected") in CLAIMED
+    )
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total sessions", total)
+    m2.metric("Claimed", claimed_count)
+    m3.metric("Available", total - claimed_count)
+    st.write("")
 
     for _, r in sessions.iterrows():
         key = f"{r['s_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
         status = sel_lookup.get(key, "Not Selected")
         claimed = status in CLAIMED
 
-        # colour: green if claimed, else yellow (available for observation)
-        bg = "#dcfce7" if claimed else "#fef9c3"
-        border = "#16a34a" if claimed else "#eab308"
+        card_cls = "sess-claimed" if claimed else "sess-available"
+        # nicely format date/time
+        try:
+            d = pd.to_datetime(r["s_date"]).strftime("%a %d %b")
+        except Exception:
+            d = str(r["s_date"])
 
-        col_info, col_action = st.columns([4, 1])
+        col_info, col_action = st.columns([5, 1.4])
         with col_info:
             st.markdown(
-                f"""<div style="background:{bg};border-left:4px solid {border};
-                     padding:8px 12px;border-radius:6px;margin-bottom:4px;">
-                     <b>{r['f_name']} {r['l_name']}</b> &nbsp;·&nbsp; {r['s_date']} {r['slot_time']}
-                     &nbsp;·&nbsp; {r['program_name']} &nbsp;·&nbsp;
-                     <span style="color:#555">batch {r['batch_code']}</span>
-                     &nbsp; {'🟢 ' + status if claimed else '🟡 Available for Observation'}
-                     </div>""",
+                f"""<div class="sess-card {card_cls}">
+                    <div class="sess-name">{r['f_name']} {r['l_name']} &nbsp;{_badge(status, claimed)}</div>
+                    <div class="sess-meta">
+                        🕑 {d} · {r['slot_time']} &nbsp;|&nbsp;
+                        <span class="sess-prog">{r['program_name']}</span>
+                        <span class="sess-batch">batch {r['batch_code']}</span>
+                    </div>
+                </div>""",
                 unsafe_allow_html=True,
             )
         with col_action:
             if is_extended:
                 new_status = st.selectbox(
-                    "status", STATUS_OPTIONS, index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
+                    "status", STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
                     key=f"sel_{key}", label_visibility="collapsed",
                 )
                 if new_status != status:
