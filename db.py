@@ -17,17 +17,31 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from urllib.parse import quote_plus
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 
 def _make_engine(section: str) -> Engine:
     cfg = st.secrets[section]
+    # URL-encode user/password so special chars (@ : / # ?) don't corrupt the URL.
+    user = quote_plus(str(cfg["user"]))
+    password = quote_plus(str(cfg["password"]))
+    host = str(cfg["host"]).strip()
+    port = int(cfg["port"])
+    database = str(cfg["database"]).strip()
     url = (
-        f"mysql+pymysql://{cfg['user']}:{cfg['password']}"
-        f"@{cfg['host']}:{cfg['port']}/{cfg['database']}?charset=utf8mb4"
+        f"mysql+pymysql://{user}:{password}"
+        f"@{host}:{port}/{database}?charset=utf8mb4"
     )
-    return create_engine(url, pool_pre_ping=True, pool_recycle=1800, future=True)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        future=True,
+        connect_args={"connect_timeout": 5},
+    )
 
 
 @st.cache_resource
