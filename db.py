@@ -12,7 +12,7 @@ All CMIS access is strictly SELECT — we never write there.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -409,3 +409,96 @@ def save_evaluation(
                 ),
                 payload,
             )
+
+
+def week_monday(d) -> date:
+    """Monday of the week containing d."""
+    d = pd.to_datetime(d).date()
+    return d - timedelta(days=d.weekday())
+
+
+def recompute_weekly_summary(core_ae_email: str, any_day_in_week) -> None:
+    """
+    Recalculate and store this Core AE's counts for the week containing
+    `any_day_in_week`, writing to weekly_ae_summary.
+
+      total_sessions    = sessions flagged available for observation
+                          (session_highlight_flags.is_highlighted = 1)
+      sessions_selected = selections with status Selected / Confirmed
+      sessions_observed = evaluations submitted (session_evaluation rows)
+
+    Called after any claim / evaluation so the table stays current.
+    """
+    ws = week_monday(any_day_in_week)
+    we = ws + timedelta(days=6)
+
+    with app_engine().begin() as conn:
+        total = conn.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM session_highlight_flags
+                WHERE core_ae_email = :c
+                  AND session_date BETWEEN :ws AND :we
+                  AND is_highlighted = 1
+                """
+            ),
+            {"c": core_ae_email, "ws": ws, "we": we},
+        ).scalar() or 0
+
+        # selections are keyed by (date, slot, batch); scope them to this Core AE
+        # via the highlight flags, which carry core_ae_email.
+        selected = conn.execute(
+            text(
+                """
+                SELECT COUNT(DISTINCT s.id)
+                FROM extended_ae_session_selection s
+                JOIN session_highlight_flags f
+                  ON f.session_date = s.session_date
+                 AND f.slot_time    = s.slot_time
+                 AND (f.batch_code <=> s.batch_code)
+                WHERE f.core_ae_email = :c
+                  AND s.session_date BETWEEN :ws AND :we
+                  AND s.status IN ('Selected', 'Confirmed')
+                """
+            ),
+            {"c": core_ae_email, "ws": ws, "we": we},
+        ).scalar() or 0
+
+        observed = conn.execute(
+            text(
+                """
+                SELECT COUNT(DISTINCT e.id)
+                FROM session_evaluation e
+                JOIN session_highlight_flags f
+                  ON f.session_date = e.session_date
+                 AND f.slot_time    = e.slot_time
+                 AND (f.batch_code <=> e.batch_code)
+                WHERE f.core_ae_email = :c
+                  AND e.session_date BETWEEN :ws AND :we
+                """
+            ),
+            {"c": core_ae_email, "ws": ws, "we": we},
+        ).scalar() or 0
+
+    upsert_weekly_summary(core_ae_email, ws, int(total), int(selected), int(observed))
+
+
+def get_weekly_summary(core_ae_email: str | None = None) -> pd.DataFrame:
+    where, params = "1=1", {}
+    if core_ae_email:
+        where = "core_ae_email = :c"
+        params["c"] = core_ae_email
+    sql = text(
+        f"""
+        SELECT core_ae_email, week_start_date, total_sessions,
+               sessions_selected, sessions_observed, updated_on
+        FROM weekly_ae_summary
+        WHERE {where}
+        ORDER BY week_start_date DESC, core_ae_email
+        """
+    )
+    try:
+        with app_engine().connect() as conn:
+            return pd.read_sql(sql, conn, params=params)
+    except Exception:
+        return pd.DataFrame()
