@@ -74,87 +74,146 @@ THEMES = {
 def _css(t: dict) -> str:
     return f"""
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
       html, body, [data-testid="stAppViewContainer"], .stApp {{
         background: {t['bg']} !important;
         color: {t['text']} !important;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
-                     Roboto, Helvetica, Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+                     "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }}
+      [data-testid="stHeader"] {{ background: transparent !important; }}
       [data-testid="stSidebar"] {{
         background: {t['surface']} !important;
         border-right: 1px solid {t['border']};
       }}
-      .block-container {{ padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1180px; }}
+      [data-testid="stSidebar"] * {{ color: {t['text']}; }}
+      .block-container {{ padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1120px; }}
 
-      h1, h2, h3, h4, p, span, label, div {{ color: {t['text']}; }}
-      h1 {{ font-weight: 700; letter-spacing: -0.02em; }}
-      h3 {{ font-weight: 600; letter-spacing: -0.01em; }}
+      h1 {{ font-weight: 700; letter-spacing: -0.025em; font-size: 2.4rem; color:{t['text']}; }}
+      h2, h3 {{ font-weight: 600; letter-spacing: -0.015em; color:{t['text']}; }}
+      p, span, label, div {{ color: {t['text']}; }}
+      .stCaption, [data-testid="stCaptionContainer"] {{ color:{t['muted']} !important; }}
 
-      /* inputs */
-      div[data-baseweb="select"] > div, .stTextInput input {{
+      /* ---------- INPUTS: closed state ---------- */
+      div[data-baseweb="select"] > div {{
         background: {t['surface']} !important;
         border: 1px solid {t['border']} !important;
-        border-radius: 10px !important;
+        border-radius: 12px !important;
         color: {t['text']} !important;
+        min-height: 44px;
+        box-shadow: none !important;
+        transition: border-color .15s ease, box-shadow .15s ease;
       }}
-      .stTextInput input::placeholder {{ color: {t['muted']} !important; }}
-
-      /* buttons */
-      .stButton > button {{
-        background: {t['accent']}; color: #fff; border: none;
-        border-radius: 980px; padding: .48rem 1.15rem;
-        font-weight: 600; font-size: .9rem; transition: opacity .15s ease;
+      div[data-baseweb="select"] > div:hover {{ border-color: {t['muted']} !important; }}
+      div[data-baseweb="select"] > div:focus-within {{
+        border-color: {t['accent']} !important;
+        box-shadow: 0 0 0 3px {t['accent']}33 !important;
       }}
-      .stButton > button:hover {{ opacity: .85; color:#fff; }}
+      div[data-baseweb="select"] div, div[data-baseweb="select"] span,
+      div[data-baseweb="select"] input {{ color: {t['text']} !important; }}
+      div[data-baseweb="select"] svg {{ fill: {t['muted']} !important; }}
 
-      /* metric tiles */
+      .stTextInput input {{
+        background: {t['surface']} !important;
+        border: 1px solid {t['border']} !important;
+        border-radius: 12px !important;
+        color: {t['text']} !important;
+        min-height: 44px; padding: 0 14px;
+      }}
+      .stTextInput input:focus {{
+        border-color: {t['accent']} !important;
+        box-shadow: 0 0 0 3px {t['accent']}33 !important;
+      }}
+      .stTextInput input::placeholder {{ color: {t['muted']} !important; opacity:1; }}
+
+      /* ---------- DROPDOWN POPOVER (renders in a detached portal) ---------- */
+      div[data-baseweb="popover"], div[data-baseweb="popover"] > div,
+      ul[data-baseweb="menu"], div[data-baseweb="menu"] {{
+        background: {t['surface']} !important;
+        border-radius: 12px !important;
+        border: 1px solid {t['border']} !important;
+        box-shadow: 0 12px 34px rgba(0,0,0,.16) !important;
+      }}
+      ul[data-baseweb="menu"] li, div[data-baseweb="menu"] li,
+      li[role="option"], div[role="option"] {{
+        background: {t['surface']} !important;
+        color: {t['text']} !important;
+        font-size: .92rem;
+        padding: 9px 14px !important;
+      }}
+      li[role="option"] *, div[role="option"] * {{ color: {t['text']} !important; }}
+      li[role="option"]:hover, div[role="option"]:hover,
+      li[aria-selected="true"], div[aria-selected="true"] {{
+        background: {t['accent_soft']} !important;
+        color: {t['accent']} !important;
+      }}
+      li[aria-selected="true"] *, li[role="option"]:hover * {{ color: {t['accent']} !important; }}
+
+      /* ---------- BUTTONS ---------- */
+      .stButton > button, .stFormSubmitButton > button {{
+        background: {t['accent']}; color: #ffffff !important; border: none;
+        border-radius: 980px; padding: .55rem 1.3rem;
+        font-weight: 600; font-size: .92rem; letter-spacing:-.01em;
+        transition: opacity .15s ease, transform .06s ease;
+      }}
+      .stButton > button:hover, .stFormSubmitButton > button:hover {{ opacity:.86; }}
+      .stButton > button:active {{ transform: scale(.985); }}
+      .stButton > button *, .stFormSubmitButton > button * {{ color:#fff !important; }}
+
+      /* ---------- RADIO (theme toggle) ---------- */
+      div[role="radiogroup"] label {{ color:{t['text']} !important; font-size:.88rem; }}
+
+      /* ---------- METRIC TILES ---------- */
       div[data-testid="stMetric"] {{
         background: {t['surface']};
         border: 1px solid {t['border']};
-        border-radius: 16px; padding: 16px 18px;
+        border-radius: 16px; padding: 18px 20px;
       }}
-      div[data-testid="stMetricValue"] {{ color: {t['text']}; font-weight: 600; }}
-      div[data-testid="stMetricLabel"] {{ color: {t['muted']}; }}
+      div[data-testid="stMetricValue"] {{
+        color:{t['text']} !important; font-weight:600; letter-spacing:-.02em;
+      }}
+      div[data-testid="stMetricLabel"] * {{ color:{t['muted']} !important; font-size:.82rem; }}
 
-      /* session cards */
+      /* ---------- SESSION CARDS ---------- */
       .sess-card {{
-        border-radius: 14px; padding: 14px 18px; margin-bottom: 10px;
+        border-radius: 14px; padding: 15px 18px; margin-bottom: 10px;
         border: 1px solid {t['border']}; background: {t['surface']};
-        transition: transform .1s ease, box-shadow .1s ease;
+        transition: transform .12s ease, box-shadow .12s ease;
       }}
-      .sess-card:hover {{ transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,0,0,.10); }}
-      .sess-available {{ background: {t['avail_bg']}; border-color: {t['avail_border']}; }}
-      .sess-claimed   {{ background: {t['claim_bg']};  border-color: {t['claim_border']}; }}
-
-      .sess-name {{ font-size: 1rem; font-weight: 650; color: {t['text']}; letter-spacing:-.01em; }}
-      .sess-meta {{ font-size: .82rem; color: {t['muted']}; margin-top: 5px; }}
+      .sess-card:hover {{ transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,.10); }}
+      .sess-available {{ background:{t['avail_bg']}; border-color:{t['avail_border']}; }}
+      .sess-claimed   {{ background:{t['claim_bg']};  border-color:{t['claim_border']}; }}
+      .sess-name {{ font-size:1rem; font-weight:600; color:{t['text']}; letter-spacing:-.012em; }}
+      .sess-meta {{ font-size:.82rem; color:{t['muted']}; margin-top:6px; }}
       .chip {{
-        display:inline-block; font-size:.71rem; font-weight:600;
+        display:inline-block; font-size:.71rem; font-weight:500;
         background:{t['chip_bg']}; color:{t['chip_text']};
-        padding: 2px 9px; border-radius: 980px; margin-left:6px;
+        padding: 3px 10px; border-radius:980px; margin-left:6px;
       }}
-      .chip-prog {{ background:{t['accent_soft']}; color:{t['accent']}; }}
+      .chip-prog {{ background:{t['accent_soft']}; color:{t['accent']}; font-weight:600; }}
       .badge {{
-        display:inline-block; font-size:.72rem; font-weight:700;
-        padding: 2px 10px; border-radius: 980px; margin-left:8px;
+        display:inline-block; font-size:.71rem; font-weight:600;
+        padding: 2px 10px; border-radius:980px; margin-left:8px;
       }}
       .badge-available {{ background:{t['avail_border']}; color:{t['avail_text']}; }}
-      .badge-selected  {{ background:{t['claim_border']}; color:#04301f; }}
-      .badge-confirmed {{ background:{t['claim_border']}; color:#04301f; }}
+      .badge-selected, .badge-confirmed {{ background:{t['claim_border']}; color:#04301f; }}
       .badge-choosing  {{ background:{t['accent']}; color:#fff; }}
 
-      /* login card */
-      .login-wrap {{ max-width: 380px; margin: 8vh auto 0; text-align:center; }}
-      .login-card {{
-        background:{t['surface']}; border:1px solid {t['border']};
-        border-radius: 18px; padding: 34px 30px;
-        box-shadow: 0 10px 40px rgba(0,0,0,.06);
+      /* ---------- LOGIN ---------- */
+      .login-title {{
+        font-size:2rem; font-weight:700; letter-spacing:-.03em;
+        margin-bottom:6px; color:{t['text']};
       }}
-      .login-title {{ font-size:1.7rem; font-weight:700; letter-spacing:-.02em; margin-bottom:4px; }}
-      .login-sub {{ color:{t['muted']}; font-size:.87rem; margin-bottom:20px; }}
-      .dbdot {{ font-size:.78rem; color:{t['muted']}; }}
-      hr {{ border-color:{t['border']}; }}
+      .login-sub {{ color:{t['muted']}; font-size:.9rem; margin-bottom:26px; }}
+      .dbdot {{ font-size:.76rem; color:{t['muted']}; margin-top:16px; }}
+
+      /* ---------- MISC ---------- */
+      hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
+      .stDataFrame {{ border:1px solid {t['border']}; border-radius:12px; overflow:hidden; }}
+      [data-testid="stAlert"] {{ border-radius:12px; }}
     </style>
     """
 
