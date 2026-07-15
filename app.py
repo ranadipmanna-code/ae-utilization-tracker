@@ -557,7 +557,7 @@ def _sessions_tab(user, role):
         sessions = sessions[sessions["batch_code"] == pick_batch]
     sessions = sessions[(sessions["_date"] >= date_from) & (sessions["_date"] <= date_to)]
 
-    done_ids = db.evaluated_session_ids(user["email"])
+    done_ids = db.evaluated_session_ids_for_role(role, user["email"])
     sessions["_sid"] = sessions.apply(
         lambda r: db.make_session_id(r["email_id"], r["_date"], r["slot_time"], r["batch_code"]), axis=1
     )
@@ -605,11 +605,14 @@ def _badge(status: str, claimed: bool) -> str:
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
     can_select = role in ("extended_ae", "core_ae", "admin")
 
-    scope_email = user_email if role == "extended_ae" else None
-    my_sel = db.get_selections(scope_email, date_from, date_to)
-    sel_lookup = {}
+    # each role reads its OWN selection table
+    my_sel = db.get_selections_for_role(role, user_email, date_from, date_to)
+    sel_lookup, assign_lookup = {}, {}
     for _, s in my_sel.iterrows():
-        sel_lookup[f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"] = s["status"]
+        k = f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"
+        sel_lookup[k] = s["status"]
+        if "assigned_extended_ae_email" in s:
+            assign_lookup[k] = s["assigned_extended_ae_email"]
 
     total = len(sessions)
     claimed_count = sum(
@@ -653,10 +656,10 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
             unsafe_allow_html=True,
         )
         for _, r in grp.iterrows():
-            _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email)
+            _session_row(r, sel_lookup, assign_lookup, can_select, core_ae_email, role, user_email)
 
 
-def _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email):
+def _session_row(r, sel_lookup, assign_lookup, can_select, core_ae_email, role, user_email):
     key = f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
     sid = r["_sid"]
     status = sel_lookup.get(key, "Not Selected")
@@ -693,9 +696,10 @@ def _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email):
                 key=f"sel_{sid}", label_visibility="collapsed",
             )
             if new_status != status:
-                db.upsert_selection(
-                    user_email, r["_date"], r["slot_time"], r["m_code"],
+                db.upsert_selection_for_role(
+                    role, user_email, r["_date"], r["slot_time"], r["m_code"],
                     r["batch_code"], new_status,
+                    assigned_extended_ae_email=assign_lookup.get(key),
                 )
                 db.set_highlight_flag(
                     r["_date"], r["slot_time"], r["batch_code"],
@@ -709,6 +713,25 @@ def _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email):
                 st.cache_data.clear()
                 st.rerun()
 
+            # --- Core AE only: delegate this observation to an Extended AE ---
+            if role in ("core_ae", "admin") and new_status in CLAIMED:
+                ext_opts = ["— keep myself —"] + db.extended_aes_for_core(core_ae_email)
+                cur_assign = assign_lookup.get(key)
+                idx = ext_opts.index(cur_assign) if cur_assign in ext_opts else 0
+                pick = st.selectbox(
+                    "assign", ext_opts, index=idx,
+                    key=f"asg_{sid}", label_visibility="collapsed",
+                )
+                new_assign = None if pick == "— keep myself —" else pick
+                if new_assign != cur_assign:
+                    db.upsert_selection_for_role(
+                        role, user_email, r["_date"], r["slot_time"], r["m_code"],
+                        r["batch_code"], new_status,
+                        assigned_extended_ae_email=new_assign,
+                    )
+                    st.cache_data.clear()
+                    st.rerun()
+
     if can_select:
         label = "✅ Evaluated — view / edit" if done else "📝 Evaluate this session"
         with st.expander(label, expanded=False):
@@ -719,7 +742,7 @@ def _evaluation_form(r, sid, trainer_name, role, user_email, done, core_ae_email
     """The post-session form. Writes to session_evaluation."""
     prev = {}
     if done:
-        allrows = db.get_evaluations(user_email)
+        allrows = db.get_evaluations_for_role(role, user_email)
         match = allrows[allrows["session_id"] == sid]
         if not match.empty:
             prev = match.iloc[0].to_dict()
@@ -766,9 +789,9 @@ def _evaluation_form(r, sid, trainer_name, role, user_email, done, core_ae_email
 
     if submitted:
         try:
-            db.save_evaluation(
-                evaluator_email=user_email,
-                evaluator_role=role,
+            db.save_evaluation_for_role(
+                role=role,
+                email=user_email,
                 session_id=sid,
                 trainer_name=trainer_name,
                 trainer_email=r["email_id"],
@@ -798,7 +821,7 @@ def _evaluations_tab(user, role):
     st.caption("Everything you've submitted, stored in the `session_evaluation` table.")
 
     scope = None if role == "admin" else user["email"]
-    df = db.get_evaluations(scope)
+    df = db.get_evaluations_for_role(role, scope)
 
     if df.empty:
         st.info("No evaluations submitted yet. Fill one in from the Sessions tab.")
@@ -827,12 +850,18 @@ def _evaluations_tab(user, role):
 
 def _team_rollup(core_ae_email, week_start, week_end):
     st.subheader("My Extended AE Team — Selected Sessions")
-    sel = db.get_selections(None, week_start, week_end)
+    sel = db.get_selections_for_role("extended_ae", None, week_start, week_end)
+    if sel.empty:
+        st.caption("No Extended AE selections yet for this week.")
+        return
     claimed = sel[sel["status"].isin(list(CLAIMED) + ["Choosing"])]
     if claimed.empty:
         st.caption("No Extended AE selections yet for this week.")
         return
-    view = claimed[["extended_ae_email", "session_date", "slot_time", "module", "batch_code", "status"]]
+    view = claimed[["owner_email", "session_date", "slot_time", "module", "batch_code", "status"]]
+    view = view.rename(columns={"owner_email": "Extended AE", "session_date": "Date",
+                                "slot_time": "Time", "module": "Module",
+                                "batch_code": "Batch", "status": "Status"})
     st.dataframe(view, use_container_width=True, hide_index=True)
 
 
@@ -842,9 +871,12 @@ def _mock_interview_section(week_start, week_end):
 
     roles = db.get_user_roles()
     ext = roles[roles["role"] == "extended_ae"]
-    sel = db.get_selections(None, week_start, week_end)
-    claimed = sel[sel["status"].isin(list(CLAIMED))]
-    claimed_counts = claimed.groupby("extended_ae_email").size().to_dict()
+    sel = db.get_selections_for_role("extended_ae", None, week_start, week_end)
+    if sel.empty:
+        claimed_counts = {}
+    else:
+        claimed = sel[sel["status"].isin(list(CLAIMED))]
+        claimed_counts = claimed.groupby("owner_email").size().to_dict()
 
     # capacity table
     cap_rows = []

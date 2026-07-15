@@ -447,38 +447,50 @@ def recompute_weekly_summary(core_ae_email: str, any_day_in_week) -> None:
 
         # selections are keyed by (date, slot, batch); scope them to this Core AE
         # via the highlight flags, which carry core_ae_email.
-        selected = conn.execute(
-            text(
-                """
-                SELECT COUNT(DISTINCT s.id)
-                FROM extended_ae_session_selection s
-                JOIN session_highlight_flags f
-                  ON f.session_date = s.session_date
-                 AND f.slot_time    = s.slot_time
-                 AND (f.batch_code <=> s.batch_code)
-                WHERE f.core_ae_email = :c
-                  AND s.session_date BETWEEN :ws AND :we
-                  AND s.status IN ('Selected', 'Confirmed')
-                """
-            ),
-            {"c": core_ae_email, "ws": ws, "we": we},
-        ).scalar() or 0
+        # selections now live in TWO tables (one per role) — count both.
+        selected = 0
+        for tbl in ("extended_ae_session_selection", "core_ae_session_selection"):
+            try:
+                selected += conn.execute(
+                    text(
+                        f"""
+                        SELECT COUNT(DISTINCT s.id)
+                        FROM {tbl} s
+                        JOIN session_highlight_flags f
+                          ON f.session_date = s.session_date
+                         AND f.slot_time    = s.slot_time
+                         AND (f.batch_code <=> s.batch_code)
+                        WHERE f.core_ae_email = :c
+                          AND s.session_date BETWEEN :ws AND :we
+                          AND s.status IN ('Selected', 'Confirmed')
+                        """
+                    ),
+                    {"c": core_ae_email, "ws": ws, "we": we},
+                ).scalar() or 0
+            except Exception:
+                pass  # table may not exist yet
 
-        observed = conn.execute(
-            text(
-                """
-                SELECT COUNT(DISTINCT e.id)
-                FROM session_evaluation e
-                JOIN session_highlight_flags f
-                  ON f.session_date = e.session_date
-                 AND f.slot_time    = e.slot_time
-                 AND (f.batch_code <=> e.batch_code)
-                WHERE f.core_ae_email = :c
-                  AND e.session_date BETWEEN :ws AND :we
-                """
-            ),
-            {"c": core_ae_email, "ws": ws, "we": we},
-        ).scalar() or 0
+        # evaluations likewise split per role
+        observed = 0
+        for tbl in ("extended_ae_evaluation", "core_ae_evaluation"):
+            try:
+                observed += conn.execute(
+                    text(
+                        f"""
+                        SELECT COUNT(DISTINCT e.id)
+                        FROM {tbl} e
+                        JOIN session_highlight_flags f
+                          ON f.session_date = e.session_date
+                         AND f.slot_time    = e.slot_time
+                         AND (f.batch_code <=> e.batch_code)
+                        WHERE f.core_ae_email = :c
+                          AND e.session_date BETWEEN :ws AND :we
+                        """
+                    ),
+                    {"c": core_ae_email, "ws": ws, "we": we},
+                ).scalar() or 0
+            except Exception:
+                pass
 
     upsert_weekly_summary(core_ae_email, ws, int(total), int(selected), int(observed))
 
@@ -502,3 +514,182 @@ def get_weekly_summary(core_ae_email: str | None = None) -> pd.DataFrame:
             return pd.read_sql(sql, conn, params=params)
     except Exception:
         return pd.DataFrame()
+
+
+# ===========================================================================
+# ROLE-SEPARATED selections + evaluations
+#   core_ae_session_selection      (+ assigned_extended_ae_email)
+#   extended_ae_session_selection
+#   core_ae_evaluation
+#   extended_ae_evaluation
+# The role decides which pair of tables is used.
+# ===========================================================================
+
+def _sel_table(role: str) -> tuple[str, str]:
+    """(table, email_column) for the selection table matching this role."""
+    if role == "extended_ae":
+        return "extended_ae_session_selection", "extended_ae_email"
+    return "core_ae_session_selection", "core_ae_email"
+
+
+def _eval_table(role: str) -> tuple[str, str]:
+    """(table, email_column) for the evaluation table matching this role."""
+    if role == "extended_ae":
+        return "extended_ae_evaluation", "extended_ae_email"
+    return "core_ae_evaluation", "core_ae_email"
+
+
+def get_selections_for_role(role: str, email: str | None, from_date: date, to_date: date) -> pd.DataFrame:
+    tbl, col = _sel_table(role)
+    where = "session_date BETWEEN :a AND :b"
+    params: dict[str, Any] = {"a": from_date, "b": to_date}
+    if email:
+        where += f" AND {col} = :e"
+        params["e"] = email
+    extra = ", assigned_extended_ae_email" if tbl == "core_ae_session_selection" else ""
+    sql = text(
+        f"SELECT id, {col} AS owner_email, session_date, slot_time, module, "
+        f"batch_code, status{extra} FROM {tbl} WHERE {where}"
+    )
+    try:
+        with app_engine().connect() as conn:
+            return pd.read_sql(sql, conn, params=params)
+    except Exception:
+        return pd.DataFrame()
+
+
+def upsert_selection_for_role(
+    role: str,
+    email: str,
+    session_date: date,
+    slot_time: str,
+    module: str | None,
+    batch_code: str | None,
+    status: str,
+    assigned_extended_ae_email: str | None = None,
+) -> None:
+    """Write a claim to the table that matches the user's role."""
+    tbl, col = _sel_table(role)
+    is_core = tbl == "core_ae_session_selection"
+
+    with app_engine().begin() as conn:
+        existing = conn.execute(
+            text(
+                f"SELECT id FROM {tbl} WHERE {col} = :e AND session_date = :d "
+                f"AND slot_time = :st AND (batch_code <=> :bc) LIMIT 1"
+            ),
+            {"e": email, "d": session_date, "st": slot_time, "bc": batch_code},
+        ).fetchone()
+
+        if existing:
+            if is_core:
+                conn.execute(
+                    text(
+                        f"UPDATE {tbl} SET status=:s, assigned_extended_ae_email=:a, "
+                        f"updated_on=NOW() WHERE id=:id"
+                    ),
+                    {"s": status, "a": assigned_extended_ae_email, "id": existing[0]},
+                )
+            else:
+                conn.execute(
+                    text(f"UPDATE {tbl} SET status=:s, updated_on=NOW() WHERE id=:id"),
+                    {"s": status, "id": existing[0]},
+                )
+        else:
+            if is_core:
+                conn.execute(
+                    text(
+                        f"INSERT INTO {tbl} ({col}, session_date, slot_time, module, "
+                        f"batch_code, status, assigned_extended_ae_email) "
+                        f"VALUES (:e,:d,:st,:m,:bc,:s,:a)"
+                    ),
+                    {"e": email, "d": session_date, "st": slot_time, "m": module,
+                     "bc": batch_code, "s": status, "a": assigned_extended_ae_email},
+                )
+            else:
+                conn.execute(
+                    text(
+                        f"INSERT INTO {tbl} ({col}, session_date, slot_time, module, "
+                        f"batch_code, status) VALUES (:e,:d,:st,:m,:bc,:s)"
+                    ),
+                    {"e": email, "d": session_date, "st": slot_time, "m": module,
+                     "bc": batch_code, "s": status},
+                )
+
+
+def get_evaluations_for_role(role: str, email: str | None = None) -> pd.DataFrame:
+    tbl, col = _eval_table(role)
+    where, params = "1=1", {}
+    if email:
+        where = f"{col} = :e"
+        params["e"] = email
+    sql = text(
+        f"SELECT id, {col} AS evaluator_email, session_id, trainer_name, trainer_email, "
+        f"session_date, slot_time, batch_code, module, program_name, duration_minutes, "
+        f"rating, remarks, status, created_on FROM {tbl} WHERE {where} ORDER BY created_on DESC"
+    )
+    try:
+        with app_engine().connect() as conn:
+            return pd.read_sql(sql, conn, params=params)
+    except Exception:
+        return pd.DataFrame()
+
+
+def evaluated_session_ids_for_role(role: str, email: str) -> set[str]:
+    df = get_evaluations_for_role(role, email)
+    return set(df["session_id"].tolist()) if not df.empty else set()
+
+
+def save_evaluation_for_role(
+    role: str,
+    email: str,
+    session_id: str,
+    trainer_name: str | None,
+    trainer_email: str | None,
+    session_date: date,
+    slot_time: str,
+    batch_code: str | None,
+    module: str | None,
+    program_name: str | None,
+    duration_minutes: int | None,
+    rating: int | None,
+    remarks: str | None,
+) -> None:
+    tbl, col = _eval_table(role)
+    with app_engine().begin() as conn:
+        existing = conn.execute(
+            text(f"SELECT id FROM {tbl} WHERE {col} = :e AND session_id = :s LIMIT 1"),
+            {"e": email, "s": session_id},
+        ).fetchone()
+        if existing:
+            conn.execute(
+                text(
+                    f"UPDATE {tbl} SET duration_minutes=:dur, rating=:rt, remarks=:rm, "
+                    f"status='Completed', updated_on=NOW() WHERE id=:id"
+                ),
+                {"dur": duration_minutes, "rt": rating, "rm": remarks, "id": existing[0]},
+            )
+        else:
+            conn.execute(
+                text(
+                    f"INSERT INTO {tbl} ({col}, session_id, trainer_name, trainer_email, "
+                    f"session_date, slot_time, batch_code, module, program_name, "
+                    f"duration_minutes, rating, remarks, status) "
+                    f"VALUES (:e,:sid,:tn,:te,:d,:st,:bc,:mo,:pn,:dur,:rt,:rm,'Completed')"
+                ),
+                {"e": email, "sid": session_id, "tn": trainer_name, "te": trainer_email,
+                 "d": session_date, "st": slot_time, "bc": batch_code, "mo": module,
+                 "pn": program_name, "dur": duration_minutes, "rt": rating, "rm": remarks},
+            )
+
+
+def extended_aes_for_core(core_ae_email: str) -> list[str]:
+    """Extended AEs available for a Core AE to delegate to.
+
+    There's no pairing table yet, so this returns every extended_ae in
+    user_roles. Narrow this once a core<->extended mapping table exists.
+    """
+    df = get_user_roles()
+    if df.empty:
+        return []
+    return sorted(df[df["role"] == "extended_ae"]["email"].tolist())
