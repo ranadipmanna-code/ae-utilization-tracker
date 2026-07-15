@@ -112,6 +112,32 @@ def _css(t: dict) -> str:
       div[data-baseweb="select"] svg {{ fill:{t['muted']} !important; }}
       input::placeholder, textarea::placeholder {{ color:{t['muted']} !important; opacity:1; }}
 
+      /* ---------- DISABLED / AUTOFILLED FIELDS ----------
+         Streamlit fades disabled inputs to ~40% opacity, which made the
+         auto-filled session details look empty. Show them clearly as
+         read-only facts instead of ghost text. */
+      .stTextInput input:disabled, .stTextArea textarea:disabled,
+      input:disabled, textarea:disabled,
+      div[data-testid="stTextInput"] input[disabled],
+      [data-baseweb="input"] input:disabled {{
+        -webkit-text-fill-color:{t['text']} !important;
+        color:{t['text']} !important;
+        opacity:1 !important;
+        background:{t['surface_2']} !important;
+        border:1px solid {t['border']} !important;
+        font-weight:500;
+        cursor:default;
+      }}
+      div[data-testid="stTextInput"]:has(input:disabled) label,
+      div[data-testid="stTextInput"] input[disabled] + div {{
+        opacity:1 !important;
+      }}
+      /* the wrapper baseweb dims too */
+      div[data-baseweb="input"]:has(input:disabled),
+      div[data-baseweb="base-input"]:has(input:disabled) {{
+        opacity:1 !important; background:{t['surface_2']} !important;
+      }}
+
       /* ---------- POPOVERS / MENUS / CALENDAR ---------- */
       div[data-baseweb="popover"], div[data-baseweb="popover"] > div,
       ul[data-baseweb="menu"], div[data-baseweb="menu"],
@@ -119,8 +145,16 @@ def _css(t: dict) -> str:
         background:{t['surface']} !important; border:1px solid {t['border']} !important;
         border-radius:12px !important; box-shadow:{t['shadow']} !important;
       }}
+      /* the scrollable list container itself (this was rendering black) */
+      div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"],
+      ul[role="listbox"], div[role="listbox"] {{
+        background:{t['surface']} !important;
+      }}
       li[role="option"], div[role="option"], div[data-baseweb="calendar"] * {{
-        background:transparent !important; color:{t['text']} !important; font-size:.9rem;
+        background:{t['surface']} !important; color:{t['text']} !important; font-size:.9rem;
+      }}
+      li[role="option"] div, li[role="option"] span {{
+        background:transparent !important; color:{t['text']} !important;
       }}
       li[role="option"] {{ padding:9px 14px !important; }}
       li[role="option"]:hover, li[aria-selected="true"],
@@ -239,6 +273,31 @@ def _css(t: dict) -> str:
       .badge-selected, .badge-confirmed {{ background:{t['claim_border']}; color:#04301f; }}
       .badge-choosing {{ background:{t['accent']}; color:#fff; }}
       .badge-done {{ background:{t['done_border']}; color:#fff; }}
+
+      /* ---------- EVALUATION: auto-filled facts panel ---------- */
+      .eval-facts {{
+        background:{t['surface_2']}; border:1px solid {t['border']};
+        border-radius:10px; padding:14px 16px; margin-bottom:16px;
+      }}
+      .eval-facts-title {{
+        font-size:.74rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.05em; color:{t['muted']}; margin-bottom:10px;
+      }}
+      .eval-grid {{
+        display:grid; grid-template-columns:repeat(3, 1fr); gap:10px 18px;
+      }}
+      .eval-grid > div {{ display:flex; flex-direction:column; }}
+      .ef-k {{
+        font-size:.7rem; font-weight:600; text-transform:uppercase;
+        letter-spacing:.04em; color:{t['muted']}; margin-bottom:2px;
+      }}
+      .ef-v {{ font-size:.9rem; font-weight:600; color:{t['text']}; }}
+      .ef-sid {{
+        margin-top:12px; padding-top:10px; border-top:1px solid {t['border']};
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:.72rem; color:{t['muted']}; word-break:break-all;
+      }}
+      .ef-sid .ef-k {{ display:block; margin-bottom:3px; }}
 
       /* day group heading */
       .day-head {{
@@ -665,23 +724,38 @@ def _evaluation_form(r, sid, trainer_name, role, user_email, done, core_ae_email
         if not match.empty:
             prev = match.iloc[0].to_dict()
 
+    # --- auto-filled session facts, shown as a readable panel (not ghosted
+    #     disabled inputs). These are pulled straight from CMIS. ---
+    day = pd.to_datetime(r["_date"]).strftime("%A, %d %B %Y")
+    st.markdown(
+        f"""<div class="eval-facts">
+          <div class="eval-facts-title">Session details &nbsp;<span class="chip">auto-filled from CMIS</span></div>
+          <div class="eval-grid">
+            <div><span class="ef-k">Trainer</span><span class="ef-v">{trainer_name}</span></div>
+            <div><span class="ef-k">Date</span><span class="ef-v">{day}</span></div>
+            <div><span class="ef-k">Time</span><span class="ef-v">{r['slot_time']}</span></div>
+            <div><span class="ef-k">Batch</span><span class="ef-v">{r['batch_code']}</span></div>
+            <div><span class="ef-k">Module</span><span class="ef-v">{r['m_code']}</span></div>
+            <div><span class="ef-k">Program</span><span class="ef-v">{r['program_name']}</span></div>
+          </div>
+          <div class="ef-sid"><span class="ef-k">Session ID</span>{sid}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
     with st.form(f"eval_{sid}", border=False):
+        st.markdown("**Your evaluation**")
         c1, c2 = st.columns(2)
         with c1:
-            st.text_input("Session ID", value=sid, disabled=True, key=f"sid_{sid}")
-            st.text_input("Trainer", value=trainer_name, disabled=True, key=f"tn_{sid}")
-            st.text_input("Date", value=str(r["_date"]), disabled=True, key=f"dt_{sid}")
-        with c2:
             duration = st.number_input(
                 "Duration observed (minutes)", min_value=0, max_value=600, step=5,
                 value=int(prev.get("duration_minutes") or 30), key=f"dur_{sid}",
             )
+        with c2:
             rating = st.select_slider(
                 "Rating", options=[1, 2, 3, 4, 5],
                 value=int(prev.get("rating") or 3), key=f"rt_{sid}",
             )
-            st.text_input("Batch / Module", value=f"{r['batch_code']} · {r['m_code']}",
-                          disabled=True, key=f"bm_{sid}")
 
         remarks = st.text_area(
             "Remarks / observations", value=prev.get("remarks") or "",
