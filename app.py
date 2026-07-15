@@ -365,6 +365,7 @@ def dashboard():
     tabs = ["📋  Sessions", "✅  My Evaluations", "🎯  Mock Interviews"]
     if role in ("core_ae", "admin"):
         tabs.insert(2, "👥  My Extended AE Team")
+        tabs.insert(3, "📊  Weekly Summary")
     made = st.tabs(tabs)
 
     with made[0]:
@@ -375,10 +376,49 @@ def dashboard():
         with made[2]:
             _rollup_tab(user, role)
         with made[3]:
+            _summary_tab(user, role)
+        with made[4]:
             _mock_tab()
     else:
         with made[2]:
             _mock_tab()
+
+
+def _summary_tab(user, role):
+    st.markdown("### Weekly Summary")
+    st.caption("Auto-maintained in `weekly_ae_summary` — updates whenever a session is claimed or evaluated.")
+
+    scope = None if role == "admin" else user["email"]
+    df = db.get_weekly_summary(scope)
+
+    core_options = _core_options_for(role, user["email"])
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        pick = st.selectbox("Core AE", core_options, key="sum_core")
+    with c2:
+        st.write("")
+        if st.button("↻  Rebuild this week", use_container_width=True):
+            try:
+                db.recompute_weekly_summary(pick, date.today())
+                st.cache_data.clear()
+                st.success("Summary rebuilt.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not rebuild: {e}")
+
+    if df.empty:
+        st.info(
+            "No summary rows yet. They appear automatically once someone claims "
+            "or evaluates a session — or hit **Rebuild this week** above."
+        )
+        return
+
+    view = df.rename(columns={
+        "core_ae_email": "Core AE", "week_start_date": "Week of",
+        "total_sessions": "Available", "sessions_selected": "Selected",
+        "sessions_observed": "Observed", "updated_on": "Updated",
+    })
+    st.dataframe(view, use_container_width=True, hide_index=True)
 
 
 def _week_bounds_now():
@@ -602,16 +642,21 @@ def _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email):
                     r["_date"], r["slot_time"], r["batch_code"],
                     core_ae_email, user_email, new_status in CLAIMED,
                 )
+                # keep weekly_ae_summary current
+                try:
+                    db.recompute_weekly_summary(core_ae_email, r["_date"])
+                except Exception:
+                    pass
                 st.cache_data.clear()
                 st.rerun()
 
     if can_select:
         label = "✅ Evaluated — view / edit" if done else "📝 Evaluate this session"
         with st.expander(label, expanded=False):
-            _evaluation_form(r, sid, name, role, user_email, done)
+            _evaluation_form(r, sid, name, role, user_email, done, core_ae_email)
 
 
-def _evaluation_form(r, sid, trainer_name, role, user_email, done):
+def _evaluation_form(r, sid, trainer_name, role, user_email, done, core_ae_email=None):
     """The post-session form. Writes to session_evaluation."""
     prev = {}
     if done:
@@ -662,6 +707,11 @@ def _evaluation_form(r, sid, trainer_name, role, user_email, done):
                 rating=int(rating),
                 remarks=remarks.strip() or None,
             )
+            try:
+                if core_ae_email:
+                    db.recompute_weekly_summary(core_ae_email, r["_date"])
+            except Exception:
+                pass
             st.cache_data.clear()
             st.success("Evaluation saved.")
             st.rerun()
