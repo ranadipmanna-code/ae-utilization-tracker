@@ -35,38 +35,24 @@ st.set_page_config(page_title="AE Utilization Tracker", layout="wide", page_icon
 # ---------------------------------------------------------------------------
 THEMES = {
     "light": {
-        "bg": "#fbfbfd",           # apple's off-white
-        "surface": "#ffffff",
-        "text": "#1d1d1f",         # apple near-black
-        "muted": "#6e6e73",
-        "border": "#d2d2d7",
-        "accent": "#0071e3",       # apple blue
-        "accent_soft": "#e8f2fd",
-        "avail_bg": "#fff8e6",
-        "avail_border": "#f0c14b",
-        "avail_text": "#7a5b00",
-        "claim_bg": "#e9f9ef",
-        "claim_border": "#34c759",  # apple green
-        "claim_text": "#0f5132",
-        "chip_bg": "#f5f5f7",
-        "chip_text": "#424245",
+        "bg": "#f5f5f7", "surface": "#ffffff", "surface_2": "#fafafa",
+        "text": "#1d1d1f", "muted": "#6e6e73", "border": "#e5e5ea",
+        "accent": "#0071e3", "accent_soft": "#eaf3fe",
+        "avail_bg": "#fffdf5", "avail_border": "#f5c518", "avail_text": "#8a6100",
+        "claim_bg": "#f2fbf5", "claim_border": "#30c85f", "claim_text": "#0b5f28",
+        "done_bg": "#f3f7ff", "done_border": "#0071e3",
+        "chip_bg": "#f5f5f7", "chip_text": "#4a4a4f",
+        "shadow": "0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06)",
     },
     "dark": {
-        "bg": "#0e1a2b",           # anudip deep navy
-        "surface": "#152740",
-        "text": "#f2f5f9",
-        "muted": "#9fb0c4",
-        "border": "#25405f",
-        "accent": "#f7941d",       # anudip orange
-        "accent_soft": "#2a2013",
-        "avail_bg": "#33280f",
-        "avail_border": "#f7941d",
-        "avail_text": "#ffd79a",
-        "claim_bg": "#10322a",
-        "claim_border": "#28c76f",
-        "claim_text": "#8ff0c0",
-        "chip_bg": "#1d3554",
-        "chip_text": "#c8d6e6",
+        "bg": "#0b1626", "surface": "#14243a", "surface_2": "#1a2c46",
+        "text": "#eef3f9", "muted": "#8ba0b8", "border": "#243c59",
+        "accent": "#f7941d", "accent_soft": "#2e2312",
+        "avail_bg": "#2b2210", "avail_border": "#f7941d", "avail_text": "#ffd79a",
+        "claim_bg": "#0d2b23", "claim_border": "#2ec27e", "claim_text": "#7fe6b6",
+        "done_bg": "#132a3f", "done_border": "#4da3ff",
+        "chip_bg": "#1e3252", "chip_text": "#bccbdd",
+        "shadow": "0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35)",
     },
 }
 
@@ -74,146 +60,163 @@ THEMES = {
 def _css(t: dict) -> str:
     return f"""
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
       html, body, [data-testid="stAppViewContainer"], .stApp {{
-        background: {t['bg']} !important;
-        color: {t['text']} !important;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-                     "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
+        background:{t['bg']} !important; color:{t['text']} !important;
+        font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+        -webkit-font-smoothing:antialiased;
       }}
-      [data-testid="stHeader"] {{ background: transparent !important; }}
+      [data-testid="stHeader"] {{ background:transparent !important; }}
+      .block-container {{ padding-top:1.6rem; padding-bottom:4rem; max-width:1180px; }}
+      h1 {{ font-weight:700; letter-spacing:-.028em; font-size:2rem; margin-bottom:0; }}
+      h2,h3 {{ font-weight:600; letter-spacing:-.015em; }}
+      p,span,label,div,li {{ color:{t['text']}; }}
+      [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {{
+        color:{t['muted']} !important;
+      }}
+
+      /* ---------- SIDEBAR ---------- */
       [data-testid="stSidebar"] {{
-        background: {t['surface']} !important;
-        border-right: 1px solid {t['border']};
+        background:{t['surface']} !important; border-right:1px solid {t['border']};
       }}
-      [data-testid="stSidebar"] * {{ color: {t['text']}; }}
-      .block-container {{ padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1120px; }}
-
-      h1 {{ font-weight: 700; letter-spacing: -0.025em; font-size: 2.4rem; color:{t['text']}; }}
-      h2, h3 {{ font-weight: 600; letter-spacing: -0.015em; color:{t['text']}; }}
-      p, span, label, div {{ color: {t['text']}; }}
-      .stCaption, [data-testid="stCaptionContainer"] {{ color:{t['muted']} !important; }}
-
-      /* ---------- INPUTS: closed state ---------- */
-      div[data-baseweb="select"] > div {{
-        background: {t['surface']} !important;
-        border: 1px solid {t['border']} !important;
-        border-radius: 12px !important;
-        color: {t['text']} !important;
-        min-height: 44px;
-        box-shadow: none !important;
-        transition: border-color .15s ease, box-shadow .15s ease;
+      [data-testid="stSidebar"] * {{ color:{t['text']}; }}
+      /* quiet, secondary sign-out */
+      [data-testid="stSidebar"] .stButton > button {{
+        background:transparent !important; color:{t['muted']} !important;
+        border:1px solid {t['border']} !important; font-weight:500; font-size:.85rem;
+        padding:.4rem 1rem;
       }}
-      div[data-baseweb="select"] > div:hover {{ border-color: {t['muted']} !important; }}
-      div[data-baseweb="select"] > div:focus-within {{
-        border-color: {t['accent']} !important;
-        box-shadow: 0 0 0 3px {t['accent']}33 !important;
+      [data-testid="stSidebar"] .stButton > button:hover {{
+        background:{t['surface_2']} !important; color:{t['text']} !important;
+        border-color:{t['muted']} !important;
+      }}
+      [data-testid="stSidebar"] .stButton > button * {{ color:inherit !important; }}
+
+      /* ---------- ALL INPUT SHELLS ---------- */
+      div[data-baseweb="select"] > div,
+      .stTextInput input, .stTextArea textarea,
+      .stDateInput input, div[data-testid="stDateInput"] > div > div,
+      .stNumberInput input, div[data-testid="stNumberInput"] > div > div {{
+        background:{t['surface']} !important;
+        border:1px solid {t['border']} !important;
+        border-radius:10px !important; color:{t['text']} !important;
+        min-height:42px; box-shadow:none !important;
+      }}
+      .stDateInput *, div[data-testid="stDateInput"] * {{ color:{t['text']} !important; }}
+      .stDateInput svg, .stNumberInput svg {{ fill:{t['muted']} !important; }}
+      div[data-baseweb="select"] > div:focus-within,
+      .stTextInput input:focus, .stTextArea textarea:focus {{
+        border-color:{t['accent']} !important; box-shadow:0 0 0 3px {t['accent']}2b !important;
       }}
       div[data-baseweb="select"] div, div[data-baseweb="select"] span,
-      div[data-baseweb="select"] input {{ color: {t['text']} !important; }}
-      div[data-baseweb="select"] svg {{ fill: {t['muted']} !important; }}
+      div[data-baseweb="select"] input {{ color:{t['text']} !important; }}
+      div[data-baseweb="select"] svg {{ fill:{t['muted']} !important; }}
+      input::placeholder, textarea::placeholder {{ color:{t['muted']} !important; opacity:1; }}
 
-      .stTextInput input {{
-        background: {t['surface']} !important;
-        border: 1px solid {t['border']} !important;
-        border-radius: 12px !important;
-        color: {t['text']} !important;
-        min-height: 44px; padding: 0 14px;
-      }}
-      .stTextInput input:focus {{
-        border-color: {t['accent']} !important;
-        box-shadow: 0 0 0 3px {t['accent']}33 !important;
-      }}
-      .stTextInput input::placeholder {{ color: {t['muted']} !important; opacity:1; }}
-
-      /* ---------- DROPDOWN POPOVER (renders in a detached portal) ---------- */
+      /* ---------- POPOVERS / MENUS / CALENDAR ---------- */
       div[data-baseweb="popover"], div[data-baseweb="popover"] > div,
-      ul[data-baseweb="menu"], div[data-baseweb="menu"] {{
-        background: {t['surface']} !important;
-        border-radius: 12px !important;
-        border: 1px solid {t['border']} !important;
-        box-shadow: 0 12px 34px rgba(0,0,0,.16) !important;
+      ul[data-baseweb="menu"], div[data-baseweb="menu"],
+      div[data-baseweb="calendar"], div[data-baseweb="datepicker"] {{
+        background:{t['surface']} !important; border:1px solid {t['border']} !important;
+        border-radius:12px !important; box-shadow:{t['shadow']} !important;
       }}
-      ul[data-baseweb="menu"] li, div[data-baseweb="menu"] li,
-      li[role="option"], div[role="option"] {{
-        background: {t['surface']} !important;
-        color: {t['text']} !important;
-        font-size: .92rem;
-        padding: 9px 14px !important;
+      li[role="option"], div[role="option"], div[data-baseweb="calendar"] * {{
+        background:transparent !important; color:{t['text']} !important; font-size:.9rem;
       }}
-      li[role="option"] *, div[role="option"] * {{ color: {t['text']} !important; }}
-      li[role="option"]:hover, div[role="option"]:hover,
-      li[aria-selected="true"], div[aria-selected="true"] {{
-        background: {t['accent_soft']} !important;
-        color: {t['accent']} !important;
+      li[role="option"] {{ padding:9px 14px !important; }}
+      li[role="option"]:hover, li[aria-selected="true"],
+      div[aria-selected="true"] {{
+        background:{t['accent_soft']} !important; color:{t['accent']} !important;
       }}
-      li[aria-selected="true"] *, li[role="option"]:hover * {{ color: {t['accent']} !important; }}
+      li[aria-selected="true"] *, li[role="option"]:hover * {{ color:{t['accent']} !important; }}
+
+      /* ---------- TABS ---------- */
+      .stTabs [data-baseweb="tab-list"] {{
+        gap:4px; background:{t['surface_2']}; padding:5px; border-radius:12px;
+        border:1px solid {t['border']};
+      }}
+      .stTabs [data-baseweb="tab"] {{
+        height:38px; border-radius:8px; padding:0 16px;
+        color:{t['muted']} !important; font-weight:500; font-size:.9rem;
+      }}
+      .stTabs [aria-selected="true"] {{
+        background:{t['surface']} !important; color:{t['text']} !important;
+        font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.08);
+      }}
+      .stTabs [aria-selected="true"] * {{ color:{t['text']} !important; }}
+      .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none; }}
 
       /* ---------- BUTTONS ---------- */
-      .stButton > button, .stFormSubmitButton > button {{
-        background: {t['accent']}; color: #ffffff !important; border: none;
-        border-radius: 980px; padding: .55rem 1.3rem;
-        font-weight: 600; font-size: .92rem; letter-spacing:-.01em;
-        transition: opacity .15s ease, transform .06s ease;
+      .stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {{
+        background:{t['accent']}; color:#fff !important; border:none; border-radius:10px;
+        padding:.5rem 1.15rem; font-weight:600; font-size:.9rem;
+        transition:opacity .15s ease, transform .06s ease;
       }}
-      .stButton > button:hover, .stFormSubmitButton > button:hover {{ opacity:.86; }}
-      .stButton > button:active {{ transform: scale(.985); }}
-      .stButton > button *, .stFormSubmitButton > button * {{ color:#fff !important; }}
+      .stButton > button:hover, .stFormSubmitButton > button:hover {{ opacity:.87; }}
+      .stButton > button:active {{ transform:scale(.98); }}
+      .stFormSubmitButton > button *, .stDownloadButton > button * {{ color:#fff !important; }}
 
-      /* ---------- RADIO (theme toggle) ---------- */
-      div[role="radiogroup"] label {{ color:{t['text']} !important; font-size:.88rem; }}
+      /* ---------- EXPANDER (evaluation form) ---------- */
+      [data-testid="stExpander"] {{
+        border:1px solid {t['border']} !important; border-radius:10px !important;
+        background:{t['surface']} !important; margin-bottom:14px;
+      }}
+      [data-testid="stExpander"] summary {{ color:{t['text']} !important; font-size:.86rem; }}
+      [data-testid="stExpander"] summary:hover {{ color:{t['accent']} !important; }}
+      [data-testid="stExpander"] * {{ color:{t['text']}; }}
 
-      /* ---------- METRIC TILES ---------- */
+      /* ---------- METRICS ---------- */
       div[data-testid="stMetric"] {{
-        background: {t['surface']};
-        border: 1px solid {t['border']};
-        border-radius: 16px; padding: 18px 20px;
+        background:{t['surface']}; border:1px solid {t['border']};
+        border-radius:12px; padding:14px 16px;
       }}
-      div[data-testid="stMetricValue"] {{
-        color:{t['text']} !important; font-weight:600; letter-spacing:-.02em;
-      }}
-      div[data-testid="stMetricLabel"] * {{ color:{t['muted']} !important; font-size:.82rem; }}
+      div[data-testid="stMetricValue"] {{ font-weight:600; letter-spacing:-.02em; font-size:1.5rem; }}
+      div[data-testid="stMetricValue"] * {{ color:{t['text']} !important; }}
+      div[data-testid="stMetricLabel"] * {{ color:{t['muted']} !important; font-size:.78rem; }}
 
-      /* ---------- SESSION CARDS ---------- */
+      /* ---------- SESSION ROW ---------- */
       .sess-card {{
-        border-radius: 14px; padding: 15px 18px; margin-bottom: 10px;
-        border: 1px solid {t['border']}; background: {t['surface']};
-        transition: transform .12s ease, box-shadow .12s ease;
+        border-radius:10px; padding:11px 14px; margin-bottom:7px;
+        border:1px solid {t['border']}; background:{t['surface']};
+        border-left:3px solid {t['border']};
+        transition:background .12s ease;
       }}
-      .sess-card:hover {{ transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,.10); }}
-      .sess-available {{ background:{t['avail_bg']}; border-color:{t['avail_border']}; }}
-      .sess-claimed   {{ background:{t['claim_bg']};  border-color:{t['claim_border']}; }}
-      .sess-name {{ font-size:1rem; font-weight:600; color:{t['text']}; letter-spacing:-.012em; }}
-      .sess-meta {{ font-size:.82rem; color:{t['muted']}; margin-top:6px; }}
+      .sess-card:hover {{ background:{t['surface_2']}; }}
+      .sess-available {{ background:{t['avail_bg']}; border-left-color:{t['avail_border']}; }}
+      .sess-claimed {{ background:{t['claim_bg']}; border-left-color:{t['claim_border']}; }}
+      .sess-done {{ background:{t['done_bg']}; border-left-color:{t['done_border']}; }}
+      .sess-name {{ font-size:.94rem; font-weight:600; letter-spacing:-.01em; }}
+      .sess-meta {{ font-size:.78rem; color:{t['muted']}; margin-top:3px; }}
       .chip {{
-        display:inline-block; font-size:.71rem; font-weight:500;
+        display:inline-block; font-size:.68rem; font-weight:500;
         background:{t['chip_bg']}; color:{t['chip_text']};
-        padding: 3px 10px; border-radius:980px; margin-left:6px;
+        padding:2px 8px; border-radius:6px; margin-left:5px;
       }}
       .chip-prog {{ background:{t['accent_soft']}; color:{t['accent']}; font-weight:600; }}
       .badge {{
-        display:inline-block; font-size:.71rem; font-weight:600;
-        padding: 2px 10px; border-radius:980px; margin-left:8px;
+        display:inline-block; font-size:.67rem; font-weight:600;
+        padding:1px 8px; border-radius:6px; margin-left:7px;
       }}
       .badge-available {{ background:{t['avail_border']}; color:{t['avail_text']}; }}
       .badge-selected, .badge-confirmed {{ background:{t['claim_border']}; color:#04301f; }}
-      .badge-choosing  {{ background:{t['accent']}; color:#fff; }}
+      .badge-choosing {{ background:{t['accent']}; color:#fff; }}
+      .badge-done {{ background:{t['done_border']}; color:#fff; }}
+
+      /* day group heading */
+      .day-head {{
+        font-size:.76rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+        color:{t['muted']}; margin:18px 0 8px; padding-bottom:5px;
+        border-bottom:1px solid {t['border']};
+      }}
 
       /* ---------- LOGIN ---------- */
-      .login-title {{
-        font-size:2rem; font-weight:700; letter-spacing:-.03em;
-        margin-bottom:6px; color:{t['text']};
-      }}
-      .login-sub {{ color:{t['muted']}; font-size:.9rem; margin-bottom:26px; }}
-      .dbdot {{ font-size:.76rem; color:{t['muted']}; margin-top:16px; }}
+      .login-title {{ font-size:1.9rem; font-weight:700; letter-spacing:-.03em; margin-bottom:6px; }}
+      .login-sub {{ color:{t['muted']}; font-size:.88rem; margin-bottom:24px; }}
+      .dbdot {{ font-size:.75rem; color:{t['muted']}; margin-top:14px; }}
 
-      /* ---------- MISC ---------- */
       hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
-      .stDataFrame {{ border:1px solid {t['border']}; border-radius:12px; overflow:hidden; }}
-      [data-testid="stAlert"] {{ border-radius:12px; }}
+      .stDataFrame {{ border:1px solid {t['border']}; border-radius:10px; overflow:hidden; }}
+      [data-testid="stAlert"] {{ border-radius:10px; }}
+      div[role="radiogroup"] label {{ font-size:.85rem; }}
     </style>
     """
 
@@ -464,10 +467,6 @@ def _badge(status: str, claimed: bool) -> str:
 
 
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
-    st.write("")
-    st.markdown("### Sessions")
-    st.caption("Yellow = available to observe · Green = claimed · Blue tick = evaluated.")
-
     can_select = role in ("extended_ae", "core_ae", "admin")
 
     scope_email = user_email if role == "extended_ae" else None
@@ -484,61 +483,95 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     done_count = int(sessions["_done"].sum()) if "_done" in sessions else 0
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Sessions", total)
+    m1.metric("Sessions", f"{total:,}")
     m2.metric("Claimed", claimed_count)
     m3.metric("Available", total - claimed_count)
     m4.metric("Evaluated", done_count)
-    st.write("")
 
-    for _, r in sessions.iterrows():
-        key = f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
-        sid = r["_sid"]
-        status = sel_lookup.get(key, "Not Selected")
-        claimed = status in CLAIMED
-        done = bool(r["_done"])
-        card_cls = "sess-claimed" if (claimed or done) else "sess-available"
-
-        d = pd.to_datetime(r["_date"]).strftime("%a %d %b %Y")
-        name = f"{r['f_name']} {r['l_name']}".strip()
-        done_badge = '<span class="badge badge-selected">✓ Evaluated</span>' if done else ""
-
-        col_info, col_action = st.columns([5, 1.5])
-        with col_info:
+    # ---- pagination: keeps the page short and scannable ----
+    PER_PAGE = 25
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    if pages > 1:
+        pcol, icol = st.columns([1, 3])
+        with pcol:
+            page = st.number_input(
+                "Page", min_value=1, max_value=pages, value=1, step=1, key="page_no"
+            )
+        with icol:
             st.markdown(
-                f"""<div class="sess-card {card_cls}">
-                    <div class="sess-name">{name}{_badge(status, claimed)}{done_badge}</div>
-                    <div class="sess-meta">
-                        {d} · {r['slot_time']}
-                        <span class="chip chip-prog">{r['program_name']}</span>
-                        <span class="chip">{r['batch_code']}</span>
-                    </div>
-                </div>""",
+                f"<div style='padding-top:30px;font-size:.82rem;opacity:.6'>"
+                f"Page {int(page)} of {pages} · {total:,} sessions</div>",
                 unsafe_allow_html=True,
             )
-        with col_action:
-            if can_select:
-                new_status = st.selectbox(
-                    "status", STATUS_OPTIONS,
-                    index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
-                    key=f"sel_{sid}", label_visibility="collapsed",
-                )
-                if new_status != status:
-                    db.upsert_selection(
-                        user_email, r["_date"], r["slot_time"], r["m_code"],
-                        r["batch_code"], new_status,
-                    )
-                    db.set_highlight_flag(
-                        r["_date"], r["slot_time"], r["batch_code"],
-                        core_ae_email, user_email, new_status in CLAIMED,
-                    )
-                    st.cache_data.clear()
-                    st.rerun()
+    else:
+        page = 1
 
-        # --- post-observation evaluation form ---
+    lo = (int(page) - 1) * PER_PAGE
+    chunk = sessions.iloc[lo:lo + PER_PAGE]
+
+    # ---- group by day so the list has structure ----
+    for day, grp in chunk.groupby("_date", sort=True):
+        st.markdown(
+            f"<div class='day-head'>{pd.to_datetime(day).strftime('%A · %d %B %Y')} "
+            f"&nbsp;·&nbsp; {len(grp)} session{'s' if len(grp) != 1 else ''}</div>",
+            unsafe_allow_html=True,
+        )
+        for _, r in grp.iterrows():
+            _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email)
+
+
+def _session_row(r, sel_lookup, can_select, core_ae_email, role, user_email):
+    key = f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
+    sid = r["_sid"]
+    status = sel_lookup.get(key, "Not Selected")
+    claimed = status in CLAIMED
+    done = bool(r["_done"])
+
+    if done:
+        cls = "sess-done"
+    elif claimed:
+        cls = "sess-claimed"
+    else:
+        cls = "sess-available"
+
+    name = f"{r['f_name']} {r['l_name']}".strip()
+    done_badge = '<span class="badge badge-done">✓ Evaluated</span>' if done else ""
+
+    c_info, c_act = st.columns([5, 1.4])
+    with c_info:
+        st.markdown(
+            f"""<div class="sess-card {cls}">
+                <div class="sess-name">{name}{_badge(status, claimed)}{done_badge}</div>
+                <div class="sess-meta">{r['slot_time']}
+                    <span class="chip chip-prog">{r['program_name']}</span>
+                    <span class="chip">{r['batch_code']}</span>
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    with c_act:
         if can_select:
-            label = "✅ Evaluation submitted — edit" if done else "📝 Evaluate this session"
-            with st.expander(label, expanded=False):
-                _evaluation_form(r, sid, name, role, user_email, done)
+            new_status = st.selectbox(
+                "status", STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
+                key=f"sel_{sid}", label_visibility="collapsed",
+            )
+            if new_status != status:
+                db.upsert_selection(
+                    user_email, r["_date"], r["slot_time"], r["m_code"],
+                    r["batch_code"], new_status,
+                )
+                db.set_highlight_flag(
+                    r["_date"], r["slot_time"], r["batch_code"],
+                    core_ae_email, user_email, new_status in CLAIMED,
+                )
+                st.cache_data.clear()
+                st.rerun()
+
+    if can_select:
+        label = "✅ Evaluated — view / edit" if done else "📝 Evaluate this session"
+        with st.expander(label, expanded=False):
+            _evaluation_form(r, sid, name, role, user_email, done)
 
 
 def _evaluation_form(r, sid, trainer_name, role, user_email, done):
