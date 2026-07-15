@@ -1,569 +1,164 @@
 """
-Extended AE Utilization Tracker — Streamlit edition.
+One-time seed for the App DB (Anudip_AE_Team).
 
-Reads faculty sessions from the CMIS view (read-only) and reads/writes app
-state to the Anudip_AE_Team database (the 5 hakathon tables).
+Populates:
+  * user_roles          — admin + 12 Core AE + 13 Extended AE logins
+  * core_ae_faculty_map — each Core AE with up to 5 faculty emails,
+                          taken from the real AE_Alignment Excel (trainers whose
+                          AE SPOC is that Core AE, chunked into rows of 5).
 
-Workflow (per the spec):
-  Step 1  Pick week + Core AE.
-  Step 2  Fetch that Core AE's faculty sessions from CMIS.
-  Step 3  Highlight sessions available for Extended AE observation (yellow).
-  Step 4  Extended AE claims sessions (status dropdown). Claimed -> GREEN.
-  Step 5  Mock-interview auto-allocation from remaining capacity.
+Run once after the tables exist:
 
-RBAC via user_roles.role:
-  admin        -> any Core AE, full visibility
-  core_ae      -> own faculty, can view + see team selections
-  extended_ae  -> own paired Core AE's faculty, can claim
+    python seed_appdb.py
+
+Idempotent-ish: it clears user_roles and core_ae_faculty_map first, then
+re-inserts, so re-running gives a clean roster. It NEVER touches CMIS.
 """
-from datetime import date, datetime, timedelta
+import sys
+import tomllib
+from collections import defaultdict
+from pathlib import Path
+from urllib.parse import quote_plus
 
-import pandas as pd
-import streamlit as st
+from openpyxl import load_workbook
+from sqlalchemy import create_engine, text
 
-import db
+SECRETS = Path(".streamlit/secrets.toml")
+EXCEL = Path("ae_alignment.xlsx")
 
-st.set_page_config(page_title="AE Utilization Tracker", layout="wide", page_icon="📊")
-
-
-# ---------------------------------------------------------------------------
-# Theming — two skins:
-#   "light"  : Apple-inspired. Airy, lots of whitespace, SF-ish system stack,
-#              near-white canvas, soft grey rules, restrained accent blue.
-#   "dark"   : Anudip-inspired. Deep navy canvas with the foundation's
-#              orange/amber accent, higher-contrast cards.
-# ---------------------------------------------------------------------------
-THEMES = {
-    "light": {
-        "bg": "#fbfbfd",           # apple's off-white
-        "surface": "#ffffff",
-        "text": "#1d1d1f",         # apple near-black
-        "muted": "#6e6e73",
-        "border": "#d2d2d7",
-        "accent": "#0071e3",       # apple blue
-        "accent_soft": "#e8f2fd",
-        "avail_bg": "#fff8e6",
-        "avail_border": "#f0c14b",
-        "avail_text": "#7a5b00",
-        "claim_bg": "#e9f9ef",
-        "claim_border": "#34c759",  # apple green
-        "claim_text": "#0f5132",
-        "chip_bg": "#f5f5f7",
-        "chip_text": "#424245",
-    },
-    "dark": {
-        "bg": "#0e1a2b",           # anudip deep navy
-        "surface": "#152740",
-        "text": "#f2f5f9",
-        "muted": "#9fb0c4",
-        "border": "#25405f",
-        "accent": "#f7941d",       # anudip orange
-        "accent_soft": "#2a2013",
-        "avail_bg": "#33280f",
-        "avail_border": "#f7941d",
-        "avail_text": "#ffd79a",
-        "claim_bg": "#10322a",
-        "claim_border": "#28c76f",
-        "claim_text": "#8ff0c0",
-        "chip_bg": "#1d3554",
-        "chip_text": "#c8d6e6",
-    },
+# 12 canonical Core AEs (name -> email); mirrors the FastAPI seed roster.
+CORE_AE = {
+    "rashmi.mukherjee@anudip.org": "Rashmi Mukherjee",
+    "tanmoy.bose@anudip.org": "Tanmoy Bose",
+    "milan.biswas@anudip.org": "Milan Biswas",
+    "biswajit.chakraborty@anudip.org": "Biswajit Chakraborty",
+    "brahma@anudip.org": "Bramha Ji",
+    "sapna.yadav@anudip.org": "Sapna Yadav",
+    "karishma.tiwari@anudip.org": "Karishma Tiwari",
+    "navamita.talukdar@anudip.org": "Navamita",
+    "susmita.chakrabarty@anudip.org": "Susmita Chakraborty",
+    "sirivennela.gaddam@anudip.org": "Siri",
+    "arnab.roy@anudip.org": "Arnab",
+    "madhu.soni@anudip.org": "Madhu Soni",
 }
 
+# 13 Extended AEs (email -> name).
+EXTENDED_AE = {
+    "priyanka.roy@anudip.org": "Priyanka Roy",
+    "kundan.sinha@anudip.org": "Kundan Sinha",
+    "sabreena.ramzan@anudip.org": "Sabreena Ramzan",
+    "divya.ns@anudip.org": "Divya NS",
+    "pallav.punit@anudip.org": "Pallav Punit",
+    "anirudhha.sharma@anudip.org": "Anirudhha Sharma",
+    "grk.mahalakshmi@anudip.org": "GRK Mahalakshmi",
+    "dipankar.biswas@anudip.org": "Dipankar Biswas",
+    "aarti.kumari@anudip.org": "Aarti Kumari",
+    "pranjya.das@anudip.org": "Pranjya Priyadarsani Das",
+    "pulak.bhattacharya@anudip.org": "Pulak Bhattacharya",
+    "priyanka.nongkhlaw@anudip.org": "Priyanka Nongkhlaw",
+    "shanmukh.adala@anudip.org": "Shanmukh Adala",
+}
+
+CORE_EMAILS = set(CORE_AE)
+SPOC_NAME_OVERRIDE = {"Arnab Roy (IBM)": "arnab.roy@anudip.org"}
+
+C_TRAINER_EMAIL, C_AE_EMAIL, C_SPOC_NAME = 1, 9, 6
+
+
+def load_secrets():
+    with open(SECRETS, "rb") as f:
+        return tomllib.load(f)
+
+
+def engine():
+    cfg = load_secrets()["appdb"]
+    pwd = quote_plus(str(cfg["password"]))
+    user = quote_plus(str(cfg["user"]))
+    url = (f"mysql+pymysql://{user}:{pwd}"
+           f"@{cfg['host']}:{cfg['port']}/{cfg['database']}?charset=utf8mb4")
+    return create_engine(url)
+
+
+def _clean(v):
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return "" if s in ("#N/A", "N/A", "None", "NA") else s
+
+
+def build_faculty_map():
+    """core_ae_email -> [faculty emails] from the Excel."""
+    wb = load_workbook(EXCEL, data_only=True)
+    ws = wb.active
+    m = defaultdict(list)
+    seen = set()
+    for r in range(2, ws.max_row + 1):
+        v = [ws.cell(r, c).value for c in range(1, 16)]
+        temail = _clean(v[C_TRAINER_EMAIL]).lower()
+        if not temail or temail in seen or temail in CORE_EMAILS or temail in EXTENDED_AE:
+            continue
+        ce = _clean(v[C_AE_EMAIL]).lower()
+        if ce not in CORE_EMAILS:
+            ce = SPOC_NAME_OVERRIDE.get(_clean(v[C_SPOC_NAME]))
+        if not ce:
+            continue
+        seen.add(temail)
+        m[ce].append(temail)
+    return m
 
-def _css(t: dict) -> str:
-    return f"""
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-      html, body, [data-testid="stAppViewContainer"], .stApp {{
-        background: {t['bg']} !important;
-        color: {t['text']} !important;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-                     "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-      }}
-      [data-testid="stHeader"] {{ background: transparent !important; }}
-      [data-testid="stSidebar"] {{
-        background: {t['surface']} !important;
-        border-right: 1px solid {t['border']};
-      }}
-      [data-testid="stSidebar"] * {{ color: {t['text']}; }}
-      .block-container {{ padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1120px; }}
-
-      h1 {{ font-weight: 700; letter-spacing: -0.025em; font-size: 2.4rem; color:{t['text']}; }}
-      h2, h3 {{ font-weight: 600; letter-spacing: -0.015em; color:{t['text']}; }}
-      p, span, label, div {{ color: {t['text']}; }}
-      .stCaption, [data-testid="stCaptionContainer"] {{ color:{t['muted']} !important; }}
-
-      /* ---------- INPUTS: closed state ---------- */
-      div[data-baseweb="select"] > div {{
-        background: {t['surface']} !important;
-        border: 1px solid {t['border']} !important;
-        border-radius: 12px !important;
-        color: {t['text']} !important;
-        min-height: 44px;
-        box-shadow: none !important;
-        transition: border-color .15s ease, box-shadow .15s ease;
-      }}
-      div[data-baseweb="select"] > div:hover {{ border-color: {t['muted']} !important; }}
-      div[data-baseweb="select"] > div:focus-within {{
-        border-color: {t['accent']} !important;
-        box-shadow: 0 0 0 3px {t['accent']}33 !important;
-      }}
-      div[data-baseweb="select"] div, div[data-baseweb="select"] span,
-      div[data-baseweb="select"] input {{ color: {t['text']} !important; }}
-      div[data-baseweb="select"] svg {{ fill: {t['muted']} !important; }}
-
-      .stTextInput input {{
-        background: {t['surface']} !important;
-        border: 1px solid {t['border']} !important;
-        border-radius: 12px !important;
-        color: {t['text']} !important;
-        min-height: 44px; padding: 0 14px;
-      }}
-      .stTextInput input:focus {{
-        border-color: {t['accent']} !important;
-        box-shadow: 0 0 0 3px {t['accent']}33 !important;
-      }}
-      .stTextInput input::placeholder {{ color: {t['muted']} !important; opacity:1; }}
-
-      /* ---------- DROPDOWN POPOVER (renders in a detached portal) ---------- */
-      div[data-baseweb="popover"], div[data-baseweb="popover"] > div,
-      ul[data-baseweb="menu"], div[data-baseweb="menu"] {{
-        background: {t['surface']} !important;
-        border-radius: 12px !important;
-        border: 1px solid {t['border']} !important;
-        box-shadow: 0 12px 34px rgba(0,0,0,.16) !important;
-      }}
-      ul[data-baseweb="menu"] li, div[data-baseweb="menu"] li,
-      li[role="option"], div[role="option"] {{
-        background: {t['surface']} !important;
-        color: {t['text']} !important;
-        font-size: .92rem;
-        padding: 9px 14px !important;
-      }}
-      li[role="option"] *, div[role="option"] * {{ color: {t['text']} !important; }}
-      li[role="option"]:hover, div[role="option"]:hover,
-      li[aria-selected="true"], div[aria-selected="true"] {{
-        background: {t['accent_soft']} !important;
-        color: {t['accent']} !important;
-      }}
-      li[aria-selected="true"] *, li[role="option"]:hover * {{ color: {t['accent']} !important; }}
-
-      /* ---------- BUTTONS ---------- */
-      .stButton > button, .stFormSubmitButton > button {{
-        background: {t['accent']}; color: #ffffff !important; border: none;
-        border-radius: 980px; padding: .55rem 1.3rem;
-        font-weight: 600; font-size: .92rem; letter-spacing:-.01em;
-        transition: opacity .15s ease, transform .06s ease;
-      }}
-      .stButton > button:hover, .stFormSubmitButton > button:hover {{ opacity:.86; }}
-      .stButton > button:active {{ transform: scale(.985); }}
-      .stButton > button *, .stFormSubmitButton > button * {{ color:#fff !important; }}
-
-      /* ---------- RADIO (theme toggle) ---------- */
-      div[role="radiogroup"] label {{ color:{t['text']} !important; font-size:.88rem; }}
-
-      /* ---------- METRIC TILES ---------- */
-      div[data-testid="stMetric"] {{
-        background: {t['surface']};
-        border: 1px solid {t['border']};
-        border-radius: 16px; padding: 18px 20px;
-      }}
-      div[data-testid="stMetricValue"] {{
-        color:{t['text']} !important; font-weight:600; letter-spacing:-.02em;
-      }}
-      div[data-testid="stMetricLabel"] * {{ color:{t['muted']} !important; font-size:.82rem; }}
-
-      /* ---------- SESSION CARDS ---------- */
-      .sess-card {{
-        border-radius: 14px; padding: 15px 18px; margin-bottom: 10px;
-        border: 1px solid {t['border']}; background: {t['surface']};
-        transition: transform .12s ease, box-shadow .12s ease;
-      }}
-      .sess-card:hover {{ transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,.10); }}
-      .sess-available {{ background:{t['avail_bg']}; border-color:{t['avail_border']}; }}
-      .sess-claimed   {{ background:{t['claim_bg']};  border-color:{t['claim_border']}; }}
-      .sess-name {{ font-size:1rem; font-weight:600; color:{t['text']}; letter-spacing:-.012em; }}
-      .sess-meta {{ font-size:.82rem; color:{t['muted']}; margin-top:6px; }}
-      .chip {{
-        display:inline-block; font-size:.71rem; font-weight:500;
-        background:{t['chip_bg']}; color:{t['chip_text']};
-        padding: 3px 10px; border-radius:980px; margin-left:6px;
-      }}
-      .chip-prog {{ background:{t['accent_soft']}; color:{t['accent']}; font-weight:600; }}
-      .badge {{
-        display:inline-block; font-size:.71rem; font-weight:600;
-        padding: 2px 10px; border-radius:980px; margin-left:8px;
-      }}
-      .badge-available {{ background:{t['avail_border']}; color:{t['avail_text']}; }}
-      .badge-selected, .badge-confirmed {{ background:{t['claim_border']}; color:#04301f; }}
-      .badge-choosing  {{ background:{t['accent']}; color:#fff; }}
-
-      /* ---------- LOGIN ---------- */
-      .login-title {{
-        font-size:2rem; font-weight:700; letter-spacing:-.03em;
-        margin-bottom:6px; color:{t['text']};
-      }}
-      .login-sub {{ color:{t['muted']}; font-size:.9rem; margin-bottom:26px; }}
-      .dbdot {{ font-size:.76rem; color:{t['muted']}; margin-top:16px; }}
-
-      /* ---------- MISC ---------- */
-      hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
-      .stDataFrame {{ border:1px solid {t['border']}; border-radius:12px; overflow:hidden; }}
-      [data-testid="stAlert"] {{ border-radius:12px; }}
-    </style>
-    """
-
-
-def apply_theme():
-    if "theme" not in st.session_state:
-        st.session_state.theme = "light"
-    st.markdown(_css(THEMES[st.session_state.theme]), unsafe_allow_html=True)
-
-
-STATUS_OPTIONS = ["Not Selected", "Choosing", "Selected", "Confirmed"]
-CLAIMED = {"Selected", "Confirmed"}
-WEEKLY_CAPACITY = 8
-
-
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
-def _theme_toggle(key: str):
-    """Small segmented control to switch skins."""
-    cur = st.session_state.get("theme", "light")
-    choice = st.radio(
-        "Appearance",
-        ["light", "dark"],
-        index=0 if cur == "light" else 1,
-        horizontal=True,
-        key=key,
-        format_func=lambda v: "☀️  Light" if v == "light" else "🌙  Dark",
-    )
-    if choice != cur:
-        st.session_state.theme = choice
-        st.rerun()
-
-
-def login_view():
-    apply_theme()
-    left, mid, right = st.columns([1, 1.1, 1])
-    with mid:
-        st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="login-title">AE Utilization Tracker</div>'
-            '<div class="login-sub">Academic Excellence · Anudip Foundation</div>',
-            unsafe_allow_html=True,
-        )
-        with st.form("login", border=False):
-            email = st.text_input("Email", placeholder="you@anudip.org").strip().lower()
-            pwd = st.text_input("Password", type="password", placeholder="••••••••")
-            ok = st.form_submit_button("Sign in", use_container_width=True)
-        _theme_toggle("theme_login")
-        cmis_ok, app_ok = db.ping()
-        st.markdown(
-            f'<div class="dbdot">CMIS {"🟢" if cmis_ok else "🔴"} &nbsp;·&nbsp; App DB {"🟢" if app_ok else "🔴"}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    if ok:
-        roles = db.get_user_roles()
-        match = roles[roles["email"].str.lower() == email]
-        if match.empty:
-            st.error("Email not found.")
-            return
-        if pwd != st.secrets["auth"]["shared_password"]:
-            st.error("Incorrect password.")
-            return
-        row = match.iloc[0]
-        st.session_state.user = {"email": row["email"], "name": row["name"], "role": row["role"]}
-        st.rerun()
-
-
-def current_week_bounds(offset_weeks: int = 0) -> tuple[date, date]:
-    today = date.today() + timedelta(weeks=offset_weeks)
-    monday = today - timedelta(days=today.weekday())
-    return monday, monday + timedelta(days=6)
-
-
-# ---------------------------------------------------------------------------
-# Main dashboard
-# ---------------------------------------------------------------------------
-def dashboard():
-    apply_theme()
-    user = st.session_state.user
-    role = user["role"]
-
-    with st.sidebar:
-        st.markdown(f"### {user['name']}")
-        st.caption(f"{user['email']} · {role}")
-        if st.button("Sign out", use_container_width=True):
-            del st.session_state.user
-            st.rerun()
-        st.divider()
-        _theme_toggle("theme_app")
-        st.divider()
-        cmis_ok, app_ok = db.ping()
-        st.markdown(
-            f'<div class="dbdot">CMIS {"🟢" if cmis_ok else "🔴"} &nbsp;·&nbsp; App DB {"🟢" if app_ok else "🔴"}</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown(
-        "<h1 style='margin-bottom:2px'>Extended AE Utilization Tracker</h1>"
-        "<p style='opacity:.6;margin-top:0;font-size:.92rem'>"
-        "Faculty observation scheduling · live from CMIS + Anudip AE Team DB</p>",
-        unsafe_allow_html=True,
-    )
-    st.write("")
-
-    # --- Step 1: week + Core AE selection ---
-    c1, c2 = st.columns(2)
-    with c1:
-        week_labels = {}
-        for off in range(-2, 5):
-            ws, we = current_week_bounds(off)
-            week_labels[f"{ws.strftime('%b %d')} – {we.strftime('%b %d, %Y')}" + (" (this week)" if off == 0 else "")] = ws
-        default_idx = list(week_labels.values()).index(current_week_bounds(0)[0])
-        wk_label = st.selectbox("Week", list(week_labels.keys()), index=default_idx)
-        week_start = week_labels[wk_label]
-        week_end = week_start + timedelta(days=6)
-
-    with c2:
-        core_options = _core_options_for(role, user["email"])
-        if not core_options:
-            st.warning("No Core AE mapping found for your account in core_ae_faculty_map.")
-            return
-        core_ae_email = st.selectbox("Core AE Member", core_options)
-
-    faculty = db.faculty_emails_for_core(core_ae_email)
-    if not faculty:
-        st.info(f"No faculty mapped to {core_ae_email} in core_ae_faculty_map.")
-        return
-
-    # --- Step 2: fetch CMIS sessions for those faculty ---
-    with st.spinner("Fetching faculty sessions from CMIS…"):
-        sessions = db.fetch_sessions_for_faculty(tuple(faculty), week_start, week_end)
-
-    if sessions.empty:
-        st.info("No CMIS sessions for this Core AE's faculty in the selected week.")
-        _mock_interview_section(week_start, week_end)
-        return
-
-    # --- Filters: trainer + batch, to keep the list readable ---
-    sessions = sessions.copy()
-    sessions["_trainer"] = (sessions["f_name"].fillna("") + " " + sessions["l_name"].fillna("")).str.strip()
-
-    f1, f2, f3 = st.columns([1.2, 1.2, 1])
-    with f1:
-        trainers = ["All trainers"] + sorted(sessions["_trainer"].dropna().unique().tolist())
-        pick_trainer = st.selectbox("Trainer", trainers)
-    with f2:
-        batch_pool = sessions if pick_trainer == "All trainers" else sessions[sessions["_trainer"] == pick_trainer]
-        batches = ["All batches"] + sorted(batch_pool["batch_code"].dropna().unique().tolist())
-        pick_batch = st.selectbox("Batch code", batches)
-    with f3:
-        day_opts = ["All days"] + sorted(sessions["s_date"].astype(str).unique().tolist())
-        pick_day = st.selectbox("Day", day_opts)
-
-    if pick_trainer != "All trainers":
-        sessions = sessions[sessions["_trainer"] == pick_trainer]
-    if pick_batch != "All batches":
-        sessions = sessions[sessions["batch_code"] == pick_batch]
-    if pick_day != "All days":
-        sessions = sessions[sessions["s_date"].astype(str) == pick_day]
-
-    if sessions.empty:
-        st.info("No sessions match these filters.")
-        return
-
-    # --- Steps 3 & 4: highlight + claim ---
-    _sessions_table(sessions, core_ae_email, week_start, week_end, role, user["email"])
-
-    # Core AE / admin: team roll-up of what Extended AEs selected
-    if role in ("core_ae", "admin"):
-        _team_rollup(core_ae_email, week_start, week_end)
-
-    # --- Step 5: mock interviews ---
-    _mock_interview_section(week_start, week_end)
-
-
-def _core_options_for(role: str, email: str) -> list[str]:
-    all_cores = db.list_core_ae_emails()
-    if role == "admin":
-        return all_cores
-    if role == "core_ae":
-        return [c for c in all_cores if c.lower() == email.lower()] or all_cores
-    # extended_ae -> the Core AE(s) whose faculty they observe. Without an
-    # explicit pairing table we let them pick any; typically one.
-    return all_cores
-
-
-def _session_key(r) -> str:
-    return f"{r['s_date']}|{r['slot_time']}|{r.get('batch_code','')}"
-
-
-def _badge(status: str, claimed: bool) -> str:
-    if status == "Confirmed":
-        return '<span class="badge badge-confirmed">✓ Confirmed</span>'
-    if status == "Selected":
-        return '<span class="badge badge-selected">✓ Selected</span>'
-    if status == "Choosing":
-        return '<span class="badge badge-choosing">⏳ Choosing</span>'
-    return '<span class="badge badge-available">◷ Available</span>'
-
-
-def _sessions_table(sessions, core_ae_email, week_start, week_end, role, user_email):
-    st.write("")
-    st.markdown("### Aligned Sessions")
-    st.caption("Yellow = available to observe · Green = claimed. Set a status to claim a session.")
-
-    # Core AE and admin can now claim/select too (not just extended_ae).
-    can_select = role in ("extended_ae", "core_ae", "admin")
-
-    # For extended_ae we scope to their own rows; core_ae/admin see all rows for
-    # the week so they can act on the team's behalf.
-    scope_email = user_email if role == "extended_ae" else None
-    my_sel = db.get_selections(scope_email, week_start, week_end)
-    sel_lookup = {}
-    for _, s in my_sel.iterrows():
-        sel_lookup[f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"] = s["status"]
-
-    total = len(sessions)
-    claimed_count = sum(
-        1 for _, r in sessions.iterrows()
-        if sel_lookup.get(f"{r['s_date']}|{r['slot_time']}|{r['batch_code'] or ''}", "Not Selected") in CLAIMED
-    )
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total sessions", total)
-    m2.metric("Claimed", claimed_count)
-    m3.metric("Available", total - claimed_count)
-    st.write("")
-
-    for _, r in sessions.iterrows():
-        key = f"{r['s_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
-        status = sel_lookup.get(key, "Not Selected")
-        claimed = status in CLAIMED
-        card_cls = "sess-claimed" if claimed else "sess-available"
-
-        try:
-            d = pd.to_datetime(r["s_date"]).strftime("%a %d %b")
-        except Exception:
-            d = str(r["s_date"])
-
-        name = f"{r['f_name']} {r['l_name']}".strip()
-
-        col_info, col_action = st.columns([5, 1.5])
-        with col_info:
-            st.markdown(
-                f"""<div class="sess-card {card_cls}">
-                    <div class="sess-name">{name}{_badge(status, claimed)}</div>
-                    <div class="sess-meta">
-                        {d} · {r['slot_time']}
-                        <span class="chip chip-prog">{r['program_name']}</span>
-                        <span class="chip">{r['batch_code']}</span>
-                    </div>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-        with col_action:
-            if can_select:
-                new_status = st.selectbox(
-                    "status", STATUS_OPTIONS,
-                    index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
-                    key=f"sel_{key}", label_visibility="collapsed",
-                )
-                if new_status != status:
-                    # who the claim belongs to: extended_ae claims for self;
-                    # core_ae / admin claim on behalf of their own account.
-                    db.upsert_selection(
-                        user_email, pd.to_datetime(r["s_date"]).date(), r["slot_time"],
-                        r["m_code"], r["batch_code"], new_status,
-                    )
-                    db.set_highlight_flag(
-                        pd.to_datetime(r["s_date"]).date(), r["slot_time"], r["batch_code"],
-                        core_ae_email, user_email, new_status in CLAIMED,
-                    )
-                    st.cache_data.clear()
-                    st.rerun()
-
-
-def _team_rollup(core_ae_email, week_start, week_end):
-    st.subheader("My Extended AE Team — Selected Sessions")
-    sel = db.get_selections(None, week_start, week_end)
-    claimed = sel[sel["status"].isin(list(CLAIMED) + ["Choosing"])]
-    if claimed.empty:
-        st.caption("No Extended AE selections yet for this week.")
-        return
-    view = claimed[["extended_ae_email", "session_date", "slot_time", "module", "batch_code", "status"]]
-    st.dataframe(view, use_container_width=True, hide_index=True)
-
-
-def _mock_interview_section(week_start, week_end):
-    st.subheader("Automated Mock Interview Allocations")
-    st.caption("Auto-filled from each Extended AE's remaining capacity after claimed observations.")
-
-    roles = db.get_user_roles()
-    ext = roles[roles["role"] == "extended_ae"]
-    sel = db.get_selections(None, week_start, week_end)
-    claimed = sel[sel["status"].isin(list(CLAIMED))]
-    claimed_counts = claimed.groupby("extended_ae_email").size().to_dict()
-
-    # capacity table
-    cap_rows = []
-    for _, e in ext.iterrows():
-        c = claimed_counts.get(e["email"], 0)
-        cap_rows.append({
-            "Extended AE": e["name"] or e["email"],
-            "Email": e["email"],
-            "Claimed": c,
-            "Remaining": max(0, WEEKLY_CAPACITY - c),
-        })
-    cap_df = pd.DataFrame(cap_rows).sort_values("Remaining", ascending=False) if cap_rows else pd.DataFrame()
-
-    # generate 6 mock slots Wed/Thu and round-robin assign by remaining capacity
-    base = week_start + timedelta(days=2)
-    slots = []
-    ref = 4021
-    remaining = {r["Email"]: r["Remaining"] for r in cap_rows}
-    order = sorted(remaining, key=lambda k: remaining[k], reverse=True)
-    idx = 0
-    for day in (base, base + timedelta(days=1)):
-        for hour in (9, 11, 14):
-            assigned = None
-            for _ in range(len(order) or 1):
-                if not order:
-                    break
-                cand = order[idx % len(order)]; idx += 1
-                if remaining.get(cand, 0) > 0:
-                    assigned = cand; remaining[cand] -= 1; break
-            name = ext[ext["email"] == assigned]["name"].iloc[0] if assigned is not None and not ext[ext["email"] == assigned].empty else assigned
-            slots.append({
-                "Slot": datetime.combine(day, datetime.min.time()).replace(hour=hour).strftime("%a %d %b, %I:%M %p"),
-                "Candidate": f"#MOCK-{ref}",
-                "Assigned Extended AE": name or "— (no capacity)",
-            })
-            ref += 1
-
-    c1, c2 = st.columns([3, 2])
-    with c1:
-        st.markdown("**Mock Interview Slots**")
-        st.dataframe(pd.DataFrame(slots), use_container_width=True, hide_index=True)
-    with c2:
-        st.markdown("**Extended AE Capacity**")
-        st.dataframe(cap_df, use_container_width=True, hide_index=True)
-
-
-# ---------------------------------------------------------------------------
 def main():
-    if "user" not in st.session_state:
-        login_view()
-    else:
-        dashboard()
+    if not SECRETS.exists():
+        sys.exit("❌ .streamlit/secrets.toml not found.")
+    if not EXCEL.exists():
+        sys.exit("❌ ae_alignment.xlsx not found next to this script.")
+
+    fac_map = build_faculty_map()
+    eng = engine()
+
+    # The real user_roles table has a NOT NULL `password` column. Use the
+    # shared demo password from secrets so logins work.
+    shared_pwd = load_secrets().get("auth", {}).get("shared_password", "Password123!")
+
+    with eng.begin() as conn:
+        # --- user_roles ---
+        conn.execute(text("DELETE FROM user_roles"))
+        conn.execute(
+            text("INSERT INTO user_roles (email, name, role, password) "
+                 "VALUES ('admin1@anudip.org','Admin One','admin',:p)"),
+            {"p": shared_pwd},
+        )
+        for email, name in CORE_AE.items():
+            conn.execute(
+                text("INSERT INTO user_roles (email, name, role, password) VALUES (:e,:n,'core_ae',:p)"),
+                {"e": email, "n": name, "p": shared_pwd},
+            )
+        for email, name in EXTENDED_AE.items():
+            conn.execute(
+                text("INSERT INTO user_roles (email, name, role, password) VALUES (:e,:n,'extended_ae',:p)"),
+                {"e": email, "n": name, "p": shared_pwd},
+            )
+
+        # --- core_ae_faculty_map: chunk faculty into rows of up to 5 ---
+        conn.execute(text("DELETE FROM core_ae_faculty_map"))
+        total_rows = 0
+        for ce, facs in fac_map.items():
+            for i in range(0, len(facs), 5):
+                chunk = facs[i:i + 5] + [None] * 5
+                conn.execute(
+                    text(
+                        "INSERT INTO core_ae_faculty_map "
+                        "(core_ae_email, faculty_1, faculty_2, faculty_3, faculty_4, faculty_5) "
+                        "VALUES (:c,:f1,:f2,:f3,:f4,:f5)"
+                    ),
+                    {"c": ce, "f1": chunk[0], "f2": chunk[1], "f3": chunk[2], "f4": chunk[3], "f5": chunk[4]},
+                )
+                total_rows += 1
+
+    print("✅ Seed complete.")
+    print(f"   user_roles: 1 admin + {len(CORE_AE)} core + {len(EXTENDED_AE)} extended")
+    print(f"   core_ae_faculty_map: {total_rows} rows across {len(fac_map)} Core AEs")
+    print("   Login password is whatever you set in secrets.toml [auth].shared_password")
 
 
 if __name__ == "__main__":
