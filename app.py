@@ -129,6 +129,45 @@ def _css(t: dict) -> str:
       }}
       li[aria-selected="true"] *, li[role="option"]:hover * {{ color:{t['accent']} !important; }}
 
+      /* ---------- CALENDAR internals (kill the black empty cells) ---------- */
+      div[data-baseweb="calendar"], div[data-baseweb="calendar"] > div,
+      div[data-baseweb="calendar"] div[role="grid"],
+      div[data-baseweb="calendar"] div[role="row"],
+      div[data-baseweb="calendar"] div[role="gridcell"],
+      div[data-baseweb="calendar"] [class*="Month"],
+      div[data-baseweb="calendar"] [class*="Week"],
+      div[data-baseweb="calendar"] [class*="Day"],
+      div[data-baseweb="datepicker"] * {{
+        background-color:{t['surface']} !important;
+        color:{t['text']} !important;
+        border-color:{t['border']} !important;
+      }}
+      /* selected / hovered day */
+      div[data-baseweb="calendar"] div[aria-selected="true"],
+      div[data-baseweb="calendar"] [class*="Day"][aria-selected="true"] {{
+        background-color:{t['accent']} !important; color:#fff !important;
+        border-radius:50% !important;
+      }}
+      div[data-baseweb="calendar"] [class*="Day"]:hover {{
+        background-color:{t['accent_soft']} !important; color:{t['accent']} !important;
+        border-radius:50% !important;
+      }}
+      div[data-baseweb="calendar"] [aria-disabled="true"],
+      div[data-baseweb="calendar"] [class*="Day"][aria-disabled="true"] {{
+        color:{t['muted']} !important; opacity:.35;
+      }}
+
+      /* ---------- NUMBER INPUT stepper (-/+ were rendering dark) ---------- */
+      div[data-testid="stNumberInput"] button,
+      [data-testid="stNumberInputStepUp"], [data-testid="stNumberInputStepDown"] {{
+        background:{t['surface_2']} !important; color:{t['text']} !important;
+        border:1px solid {t['border']} !important;
+      }}
+      div[data-testid="stNumberInput"] button:hover {{
+        background:{t['accent_soft']} !important; color:{t['accent']} !important;
+      }}
+      div[data-testid="stNumberInput"] button svg {{ fill:{t['text']} !important; }}
+
       /* ---------- TABS ---------- */
       .stTabs [data-baseweb="tab-list"] {{
         gap:4px; background:{t['surface_2']}; padding:5px; border-radius:12px;
@@ -370,14 +409,15 @@ def _sessions_tab(user, role):
         st.warning("No Core AE mapping found for your account in core_ae_faculty_map.")
         return
 
-    core_ae_email = st.selectbox("Core AE Member", core_options)
+    c1, _ = st.columns([2, 3])
+    with c1:
+        core_ae_email = st.selectbox("Core AE Member", core_options)
 
     faculty = db.faculty_emails_for_core(core_ae_email)
     if not faculty:
         st.info(f"No faculty mapped to {core_ae_email} in core_ae_faculty_map.")
         return
 
-    # --- Fetch the FULL CMIS horizon for these faculty (not just one week) ---
     with st.spinner("Fetching sessions from CMIS…"):
         sessions = db.fetch_sessions_all_for_faculty(tuple(faculty))
 
@@ -388,28 +428,29 @@ def _sessions_tab(user, role):
     sessions = sessions.copy()
     sessions["_trainer"] = (sessions["f_name"].fillna("") + " " + sessions["l_name"].fillna("")).str.strip()
     sessions["_date"] = pd.to_datetime(sessions["s_date"]).dt.date
+    lo_d, hi_d = sessions["_date"].min(), sessions["_date"].max()
 
-    lo, hi = sessions["_date"].min(), sessions["_date"].max()
-    st.caption(f"CMIS holds **{len(sessions):,}** sessions for these faculty · {lo} → {hi}")
+    with st.expander(f"🔎  Filters · {len(sessions):,} sessions in CMIS ({lo_d} → {hi_d})", expanded=True):
+        f1, f2 = st.columns(2)
+        with f1:
+            trainers = ["All trainers"] + sorted(sessions["_trainer"].dropna().unique().tolist())
+            pick_trainer = st.selectbox("Trainer", trainers)
+        with f2:
+            pool = sessions if pick_trainer == "All trainers" else sessions[sessions["_trainer"] == pick_trainer]
+            batches = ["All batches"] + sorted(pool["batch_code"].dropna().unique().tolist())
+            pick_batch = st.selectbox("Batch code", batches)
 
-    # --- Filters ---
-    f1, f2 = st.columns(2)
-    with f1:
-        trainers = ["All trainers"] + sorted(sessions["_trainer"].dropna().unique().tolist())
-        pick_trainer = st.selectbox("Trainer", trainers)
-    with f2:
-        pool = sessions if pick_trainer == "All trainers" else sessions[sessions["_trainer"] == pick_trainer]
-        batches = ["All batches"] + sorted(pool["batch_code"].dropna().unique().tolist())
-        pick_batch = st.selectbox("Batch code", batches)
-
-    d1, d2, d3 = st.columns([1, 1, 1])
-    with d1:
-        date_from = st.date_input("From", value=max(lo, date.today()), min_value=lo, max_value=hi)
-    with d2:
-        date_to = st.date_input("To", value=min(hi, date.today() + timedelta(days=30)),
-                                min_value=lo, max_value=hi)
-    with d3:
-        only_open = st.selectbox("Show", ["All sessions", "Not yet evaluated", "Evaluated only"])
+        d1, d2, d3 = st.columns(3)
+        default_from = max(lo_d, date.today())
+        with d1:
+            date_from = st.date_input("From", value=default_from, min_value=lo_d, max_value=hi_d)
+        with d2:
+            date_to = st.date_input(
+                "To", value=min(hi_d, default_from + timedelta(days=13)),
+                min_value=lo_d, max_value=hi_d,
+            )
+        with d3:
+            only_open = st.selectbox("Show", ["All sessions", "Not yet evaluated", "Evaluated only"])
 
     if pick_trainer != "All trainers":
         sessions = sessions[sessions["_trainer"] == pick_trainer]
@@ -429,16 +470,12 @@ def _sessions_tab(user, role):
         sessions = sessions[sessions["_done"]]
 
     if sessions.empty:
-        st.info("No sessions match these filters.")
+        st.info("No sessions match these filters. Try widening the date range.")
         return
 
-    # cap the render for sanity; filters narrow it down
-    MAX_SHOW = 150
-    shown = sessions.head(MAX_SHOW)
-    if len(sessions) > MAX_SHOW:
-        st.caption(f"Showing first {MAX_SHOW} of {len(sessions):,} — narrow the filters to see more.")
-
-    _sessions_table(shown, core_ae_email, date_from, date_to, role, user["email"])
+    # NOTE: no row cap here — pagination in _sessions_table handles volume,
+    # so the metrics and page count reflect the TRUE filtered total.
+    _sessions_table(sessions, core_ae_email, date_from, date_to, role, user["email"])
 
 
 def _core_options_for(role: str, email: str) -> list[str]:
