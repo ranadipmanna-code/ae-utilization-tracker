@@ -228,7 +228,7 @@ def _css(t: dict) -> str:
       .stButton > button:active {{ transform:scale(.98); }}
       .stFormSubmitButton > button *, .stDownloadButton > button * {{ color:#fff !important; }}
 
-      /* ---------- EXPANDER (evaluation form) ---------- */
+      /* ---------- EXPANDER ---------- */
       [data-testid="stExpander"] {{
         border:1px solid {t['border']} !important; border-radius:10px !important;
         background:{t['surface']} !important; margin-bottom:14px;
@@ -274,7 +274,7 @@ def _css(t: dict) -> str:
       .badge-choosing {{ background:{t['accent']}; color:#fff; }}
       .badge-done {{ background:{t['done_border']}; color:#fff; }}
 
-      /* ---------- EVALUATION: auto-filled facts panel ---------- */
+      /* ---------- facts panel ---------- */
       .eval-facts {{
         background:{t['surface_2']}; border:1px solid {t['border']};
         border-radius:10px; padding:14px 16px; margin-bottom:16px;
@@ -421,31 +421,30 @@ def dashboard():
         unsafe_allow_html=True,
     )
 
-    tabs = ["📋  Sessions", "✅  My Evaluations", "🎯  Mock Interviews"]
+    # Evaluation removed (change #3) — will return later via a Google Sheets form.
+    tabs = ["📋  Sessions", "🎯  Mock Interviews"]
     if role in ("core_ae", "admin"):
-        tabs.insert(2, "👥  My Extended AE Team")
-        tabs.insert(3, "📊  Weekly Summary")
+        tabs.insert(1, "👥  My Extended AE Team")
+        tabs.insert(2, "📊  Weekly Summary")
     made = st.tabs(tabs)
 
     with made[0]:
         _sessions_tab(user, role)
-    with made[1]:
-        _evaluations_tab(user, role)
     if role in ("core_ae", "admin"):
-        with made[2]:
+        with made[1]:
             _rollup_tab(user, role)
-        with made[3]:
+        with made[2]:
             _summary_tab(user, role)
-        with made[4]:
+        with made[3]:
             _mock_tab()
     else:
-        with made[2]:
+        with made[1]:
             _mock_tab()
 
 
 def _summary_tab(user, role):
     st.markdown("### Weekly Summary")
-    st.caption("Auto-maintained in `weekly_ae_summary` — updates whenever a session is claimed or evaluated.")
+    st.caption("Auto-maintained in `weekly_ae_summary` — updates whenever a session is claimed.")
 
     scope = None if role == "admin" else user["email"]
     df = db.get_weekly_summary(scope)
@@ -468,7 +467,7 @@ def _summary_tab(user, role):
     if df.empty:
         st.info(
             "No summary rows yet. They appear automatically once someone claims "
-            "or evaluates a session — or hit **Rebuild this week** above."
+            "a session — or hit **Rebuild this week** above."
         )
         return
 
@@ -549,7 +548,7 @@ def _sessions_tab(user, role):
                 min_value=lo_d, max_value=hi_d,
             )
         with d3:
-            only_open = st.selectbox("Show", ["All sessions", "Not yet evaluated", "Evaluated only"])
+            only_open = st.selectbox("Show", ["All sessions", "Unclaimed only", "My claims only"])
 
     if pick_trainer != "All trainers":
         sessions = sessions[sessions["_trainer"] == pick_trainer]
@@ -557,16 +556,21 @@ def _sessions_tab(user, role):
         sessions = sessions[sessions["batch_code"] == pick_batch]
     sessions = sessions[(sessions["_date"] >= date_from) & (sessions["_date"] <= date_to)]
 
-    done_ids = db.evaluated_session_ids_for_role(role, user["email"])
-    sessions["_sid"] = sessions.apply(
-        lambda r: db.make_session_id(r["email_id"], r["_date"], r["slot_time"], r["batch_code"]), axis=1
-    )
-    sessions["_done"] = sessions["_sid"].isin(done_ids)
-
-    if only_open == "Not yet evaluated":
-        sessions = sessions[~sessions["_done"]]
-    elif only_open == "Evaluated only":
-        sessions = sessions[sessions["_done"]]
+    # claim-status filter (evaluation removed — change #3)
+    if only_open != "All sessions":
+        vis = db.get_visible_selections(role, user["email"], date_from, date_to)
+        mine = set()
+        if not vis.empty:
+            for _, s in vis.iterrows():
+                if s["status"] in CLAIMED:
+                    mine.add(f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}")
+        keys = sessions.apply(
+            lambda r: f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", axis=1
+        )
+        if only_open == "Unclaimed only":
+            sessions = sessions[~keys.isin(mine)]
+        elif only_open == "My claims only":
+            sessions = sessions[keys.isin(mine)]
 
     if sessions.empty:
         st.info("No sessions match these filters. Try widening the date range.")
@@ -578,13 +582,25 @@ def _sessions_tab(user, role):
 
 
 def _core_options_for(role: str, email: str) -> list[str]:
+    """
+    Which Core AEs this user may work with.
+
+      admin        -> everyone (override)
+      core_ae      -> themselves
+      extended_ae  -> only their paired Core AE, per the ae_extae table.
+                      Falls back to the full list if no pairing is recorded,
+                      so a missing row never locks someone out.
+    """
     all_cores = db.list_core_ae_emails()
     if role == "admin":
         return all_cores
     if role == "core_ae":
         return [c for c in all_cores if c.lower() == email.lower()] or all_cores
-    # extended_ae -> the Core AE(s) whose faculty they observe. Without an
-    # explicit pairing table we let them pick any; typically one.
+
+    # extended_ae — scope to their pair
+    paired = db.core_ae_for_extended(email)
+    if paired:
+        return [paired]
     return all_cores
 
 
@@ -603,42 +619,71 @@ def _badge(status: str, claimed: bool) -> str:
 
 
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
+    """
+    CHANGE #6 — performance.
+    The old version rendered a st.selectbox + st.expander PER ROW (~50 widgets
+    per page), and every interaction reran the whole script. This uses ONE
+    st.data_editor for the entire page instead: a single widget, one rerun on
+    submit, no per-row Python loop.
+
+    CHANGE #1 — an Extended AE also sees sessions delegated to them by their
+    Core AE, marked with source='delegated'.
+    """
     can_select = role in ("extended_ae", "core_ae", "admin")
 
-    # each role reads its OWN selection table
-    my_sel = db.get_selections_for_role(role, user_email, date_from, date_to)
-    sel_lookup, assign_lookup = {}, {}
-    for _, s in my_sel.iterrows():
-        k = f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"
-        sel_lookup[k] = s["status"]
-        if "assigned_extended_ae_email" in s:
-            assign_lookup[k] = s["assigned_extended_ae_email"]
+    # what this user already owns / has been given
+    visible = db.get_visible_selections(role, user_email, date_from, date_to)
+    status_by_key, source_by_key, by_whom = {}, {}, {}
+    if not visible.empty:
+        for _, s in visible.iterrows():
+            k = f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"
+            status_by_key[k] = s["status"]
+            source_by_key[k] = s.get("source", "own")
+            by_whom[k] = s.get("delegated_by")
 
-    total = len(sessions)
-    claimed_count = sum(
-        1 for _, r in sessions.iterrows()
-        if sel_lookup.get(f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", "Not Selected") in CLAIMED
+    df = sessions.copy()
+    df["_key"] = df.apply(
+        lambda r: f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", axis=1
     )
-    done_count = int(sessions["_done"].sum()) if "_done" in sessions else 0
+    df["Status"] = df["_key"].map(lambda k: status_by_key.get(k, "Not Selected"))
+    df["_source"] = df["_key"].map(lambda k: source_by_key.get(k, ""))
+    df["_by"] = df["_key"].map(lambda k: by_whom.get(k))
+
+    def _origin(r):
+        if r["_source"] == "delegated":
+            who = (r["_by"] or "").split("@")[0]
+            return f"📥 from {who}"
+        if r["_source"] == "own":
+            return "✔ mine"
+        return ""
+
+    df["Origin"] = df.apply(_origin, axis=1)
+    df["Trainer"] = (df["f_name"].fillna("") + " " + df["l_name"].fillna("")).str.strip()
+    df["Date"] = pd.to_datetime(df["_date"]).dt.strftime("%a %d %b")
+    df["Time"] = df["slot_time"]
+    df["Duration"] = df.get("time_duration", pd.Series([""] * len(df)))
+    df["Batch"] = df["batch_code"]
+    df["Program"] = df["program_name"]
+
+    total = len(df)
+    claimed = int(df["Status"].isin(list(CLAIMED)).sum())
+    delegated = int((df["_source"] == "delegated").sum())
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Sessions", f"{total:,}")
-    m2.metric("Claimed", claimed_count)
-    m3.metric("Available", total - claimed_count)
-    m4.metric("Evaluated", done_count)
+    m2.metric("Claimed", claimed)
+    m3.metric("Available", total - claimed)
+    m4.metric("Delegated to me", delegated)
 
-    # ---- pagination: keeps the page short and scannable ----
-    PER_PAGE = 25
+    PER_PAGE = 50
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     if pages > 1:
-        pcol, icol = st.columns([1, 3])
-        with pcol:
-            page = st.number_input(
-                "Page", min_value=1, max_value=pages, value=1, step=1, key="page_no"
-            )
-        with icol:
+        p1, p2 = st.columns([1, 4])
+        with p1:
+            page = st.number_input("Page", 1, pages, 1, 1, key="page_no")
+        with p2:
             st.markdown(
-                f"<div style='padding-top:30px;font-size:.82rem;opacity:.6'>"
+                f"<div style='padding-top:32px;font-size:.82rem;opacity:.6'>"
                 f"Page {int(page)} of {pages} · {total:,} sessions</div>",
                 unsafe_allow_html=True,
             )
@@ -646,206 +691,57 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
         page = 1
 
     lo = (int(page) - 1) * PER_PAGE
-    chunk = sessions.iloc[lo:lo + PER_PAGE]
+    chunk = df.iloc[lo:lo + PER_PAGE].copy()
 
-    # ---- group by day so the list has structure ----
-    for day, grp in chunk.groupby("_date", sort=True):
-        st.markdown(
-            f"<div class='day-head'>{pd.to_datetime(day).strftime('%A · %d %B %Y')} "
-            f"&nbsp;·&nbsp; {len(grp)} session{'s' if len(grp) != 1 else ''}</div>",
-            unsafe_allow_html=True,
-        )
-        for _, r in grp.iterrows():
-            _session_row(r, sel_lookup, assign_lookup, can_select, core_ae_email, role, user_email)
+    show_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Origin", "Status"]
+    editable = chunk[show_cols].copy()
 
-
-def _session_row(r, sel_lookup, assign_lookup, can_select, core_ae_email, role, user_email):
-    key = f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}"
-    sid = r["_sid"]
-    status = sel_lookup.get(key, "Not Selected")
-    claimed = status in CLAIMED
-    done = bool(r["_done"])
-
-    if done:
-        cls = "sess-done"
-    elif claimed:
-        cls = "sess-claimed"
-    else:
-        cls = "sess-available"
-
-    name = f"{r['f_name']} {r['l_name']}".strip()
-    done_badge = '<span class="badge badge-done">✓ Evaluated</span>' if done else ""
-
-    c_info, c_act = st.columns([5, 1.4])
-    with c_info:
-        st.markdown(
-            f"""<div class="sess-card {cls}">
-                <div class="sess-name">{name}{_badge(status, claimed)}{done_badge}</div>
-                <div class="sess-meta">{r['slot_time']}
-                    <span class="chip chip-prog">{r['program_name']}</span>
-                    <span class="chip">{r['batch_code']}</span>
-                </div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-    with c_act:
-        if can_select:
-            new_status = st.selectbox(
-                "status", STATUS_OPTIONS,
-                index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
-                key=f"sel_{sid}", label_visibility="collapsed",
-            )
-            if new_status != status:
-                db.upsert_selection_for_role(
-                    role, user_email, r["_date"], r["slot_time"], r["m_code"],
-                    r["batch_code"], new_status,
-                    assigned_extended_ae_email=assign_lookup.get(key),
-                )
-                db.set_highlight_flag(
-                    r["_date"], r["slot_time"], r["batch_code"],
-                    core_ae_email, user_email, new_status in CLAIMED,
-                )
-                # keep weekly_ae_summary current
-                try:
-                    db.recompute_weekly_summary(core_ae_email, r["_date"])
-                except Exception:
-                    pass
-                st.cache_data.clear()
-                st.rerun()
-
-            # --- Core AE only: delegate this observation to an Extended AE ---
-            if role in ("core_ae", "admin") and new_status in CLAIMED:
-                ext_opts = ["— keep myself —"] + db.extended_aes_for_core(core_ae_email)
-                cur_assign = assign_lookup.get(key)
-                idx = ext_opts.index(cur_assign) if cur_assign in ext_opts else 0
-                pick = st.selectbox(
-                    "assign", ext_opts, index=idx,
-                    key=f"asg_{sid}", label_visibility="collapsed",
-                )
-                new_assign = None if pick == "— keep myself —" else pick
-                if new_assign != cur_assign:
-                    db.upsert_selection_for_role(
-                        role, user_email, r["_date"], r["slot_time"], r["m_code"],
-                        r["batch_code"], new_status,
-                        assigned_extended_ae_email=new_assign,
-                    )
-                    st.cache_data.clear()
-                    st.rerun()
-
-    if can_select:
-        label = "✅ Evaluated — view / edit" if done else "📝 Evaluate this session"
-        with st.expander(label, expanded=False):
-            _evaluation_form(r, sid, name, role, user_email, done, core_ae_email)
-
-
-def _evaluation_form(r, sid, trainer_name, role, user_email, done, core_ae_email=None):
-    """The post-session form. Writes to session_evaluation."""
-    prev = {}
-    if done:
-        allrows = db.get_evaluations_for_role(role, user_email)
-        match = allrows[allrows["session_id"] == sid]
-        if not match.empty:
-            prev = match.iloc[0].to_dict()
-
-    # --- auto-filled session facts, shown as a readable panel (not ghosted
-    #     disabled inputs). These are pulled straight from CMIS. ---
-    day = pd.to_datetime(r["_date"]).strftime("%A, %d %B %Y")
-    st.markdown(
-        f"""<div class="eval-facts">
-          <div class="eval-facts-title">Session details &nbsp;<span class="chip">auto-filled from CMIS</span></div>
-          <div class="eval-grid">
-            <div><span class="ef-k">Trainer</span><span class="ef-v">{trainer_name}</span></div>
-            <div><span class="ef-k">Date</span><span class="ef-v">{day}</span></div>
-            <div><span class="ef-k">Time</span><span class="ef-v">{r['slot_time']}</span></div>
-            <div><span class="ef-k">Batch</span><span class="ef-v">{r['batch_code']}</span></div>
-            <div><span class="ef-k">Module</span><span class="ef-v">{r['m_code']}</span></div>
-            <div><span class="ef-k">Program</span><span class="ef-v">{r['program_name']}</span></div>
-          </div>
-          <div class="ef-sid"><span class="ef-k">Session ID</span>{sid}</div>
-        </div>""",
-        unsafe_allow_html=True,
+    st.caption(
+        "Set **Status** on any row, then press **Save changes**. "
+        "📥 = delegated to you by your Core AE."
     )
 
-    with st.form(f"eval_{sid}", border=False):
-        st.markdown("**Your evaluation**")
-        c1, c2 = st.columns(2)
-        with c1:
-            duration = st.number_input(
-                "Duration observed (minutes)", min_value=0, max_value=600, step=5,
-                value=int(prev.get("duration_minutes") or 30), key=f"dur_{sid}",
-            )
-        with c2:
-            rating = st.select_slider(
-                "Rating", options=[1, 2, 3, 4, 5],
-                value=int(prev.get("rating") or 3), key=f"rt_{sid}",
-            )
+    edited = st.data_editor(
+        editable,
+        key=f"editor_{page}",
+        use_container_width=True,
+        hide_index=True,
+        height=min(560, 46 + 35 * len(editable)),
+        disabled=[c for c in show_cols if c != "Status"] if can_select else show_cols,
+        column_config={
+            "Status": st.column_config.SelectboxColumn(
+                "Status", options=STATUS_OPTIONS, required=True, width="medium"
+            ),
+            "Program": st.column_config.TextColumn("Program", width="medium"),
+            "Origin": st.column_config.TextColumn("Origin", width="small"),
+        },
+    )
 
-        remarks = st.text_area(
-            "Remarks / observations", value=prev.get("remarks") or "",
-            placeholder="What went well, what to improve, follow-ups…",
-            key=f"rm_{sid}", height=90,
-        )
-        submitted = st.form_submit_button("Submit evaluation" if not done else "Update evaluation")
-
-    if submitted:
-        try:
-            db.save_evaluation_for_role(
-                role=role,
-                email=user_email,
-                session_id=sid,
-                trainer_name=trainer_name,
-                trainer_email=r["email_id"],
-                session_date=r["_date"],
-                slot_time=r["slot_time"],
-                batch_code=r["batch_code"],
-                module=r["m_code"],
-                program_name=r["program_name"],
-                duration_minutes=int(duration),
-                rating=int(rating),
-                remarks=remarks.strip() or None,
+    if can_select and st.button("💾  Save changes", type="primary"):
+        changes = 0
+        for i, (_, orig) in enumerate(chunk.iterrows()):
+            new_status = edited.iloc[i]["Status"]
+            if new_status == orig["Status"]:
+                continue
+            db.upsert_selection_for_role(
+                role, user_email, orig["_date"], orig["slot_time"],
+                orig["m_code"], orig["batch_code"], new_status,
             )
+            db.set_highlight_flag(
+                orig["_date"], orig["slot_time"], orig["batch_code"],
+                core_ae_email, user_email, new_status in CLAIMED,
+            )
+            changes += 1
+        if changes:
             try:
-                if core_ae_email:
-                    db.recompute_weekly_summary(core_ae_email, r["_date"])
+                db.recompute_weekly_summary(core_ae_email, date_from)
             except Exception:
                 pass
             st.cache_data.clear()
-            st.success("Evaluation saved.")
+            st.success(f"Saved {changes} change{'s' if changes != 1 else ''}.")
             st.rerun()
-        except Exception as e:
-            st.error(f"Could not save — has the session_evaluation table been created? ({e})")
-
-
-def _evaluations_tab(user, role):
-    st.markdown("### My Evaluations")
-    st.caption("Everything you've submitted, stored in the `session_evaluation` table.")
-
-    scope = None if role == "admin" else user["email"]
-    df = db.get_evaluations_for_role(role, scope)
-
-    if df.empty:
-        st.info("No evaluations submitted yet. Fill one in from the Sessions tab.")
-        return
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total evaluations", len(df))
-    m2.metric("Avg rating", round(df["rating"].dropna().mean(), 2) if df["rating"].notna().any() else "—")
-    m3.metric("Minutes observed", int(df["duration_minutes"].fillna(0).sum()))
-    st.write("")
-
-    view = df[["session_date", "trainer_name", "batch_code", "module",
-               "duration_minutes", "rating", "remarks", "evaluator_email", "created_on"]]
-    view = view.rename(columns={
-        "session_date": "Date", "trainer_name": "Trainer", "batch_code": "Batch",
-        "module": "Module", "duration_minutes": "Mins", "rating": "Rating",
-        "remarks": "Remarks", "evaluator_email": "Evaluator", "created_on": "Submitted",
-    })
-    st.dataframe(view, use_container_width=True, hide_index=True)
-
-    st.download_button(
-        "⬇  Download as CSV", view.to_csv(index=False).encode(),
-        file_name="ae_evaluations.csv", mime="text/csv",
-    )
+        else:
+            st.info("Nothing changed.")
 
 
 def _team_rollup(core_ae_email, week_start, week_end):

@@ -683,13 +683,123 @@ def save_evaluation_for_role(
             )
 
 
-def extended_aes_for_core(core_ae_email: str) -> list[str]:
-    """Extended AEs available for a Core AE to delegate to.
+# ---------------------------------------------------------------------------
+# Core AE  <->  Extended AE pairing, from the `ae_extae` table
+#   ae_email_id | ext_ae_1 | ext_ae_2 | ext_ae_3
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=60, show_spinner=False)
+def get_ae_pairings() -> pd.DataFrame:
+    try:
+        with app_engine().connect() as conn:
+            return pd.read_sql(
+                text("SELECT ae_email_id, ext_ae_1, ext_ae_2, ext_ae_3 FROM ae_extae"), conn
+            )
+    except Exception:
+        return pd.DataFrame()
 
-    There's no pairing table yet, so this returns every extended_ae in
-    user_roles. Narrow this once a core<->extended mapping table exists.
-    """
+
+def extended_aes_for_core(core_ae_email: str) -> list[str]:
+    """The Extended AEs paired to this Core AE (from ae_extae)."""
+    df = get_ae_pairings()
+    if df.empty:
+        return []
+    rows = df[df["ae_email_id"].str.lower() == (core_ae_email or "").lower()]
+    out: list[str] = []
+    for _, r in rows.iterrows():
+        for c in ("ext_ae_1", "ext_ae_2", "ext_ae_3"):
+            v = r.get(c)
+            # pandas turns SQL NULLs into NaN, which str()s to "nan" —
+            # guard explicitly or a bogus "nan" option reaches the dropdown.
+            if pd.isna(v):
+                continue
+            s = str(v).strip()
+            if s and s.lower() not in ("nan", "none", "null"):
+                out.append(s)
+    return sorted(set(out))
+
+
+def core_ae_for_extended(extended_ae_email: str) -> str | None:
+    """The Core AE this Extended AE is paired to (from ae_extae)."""
+    df = get_ae_pairings()
+    if df.empty:
+        return None
+    target = (extended_ae_email or "").lower()
+    if not target:
+        return None
+    for _, r in df.iterrows():
+        for c in ("ext_ae_1", "ext_ae_2", "ext_ae_3"):
+            v = r.get(c)
+            if pd.isna(v):
+                continue
+            if str(v).strip().lower() == target:
+                return r["ae_email_id"]
+    return None
+
+
+def all_extended_aes() -> list[str]:
+    """Every Extended AE in user_roles (used for the 'pick others' escape hatch)."""
     df = get_user_roles()
     if df.empty:
         return []
     return sorted(df[df["role"] == "extended_ae"]["email"].tolist())
+
+
+# ---------------------------------------------------------------------------
+# CHANGE #1 — delegated sessions must be visible to the assigned Extended AE.
+# A Core AE claims into core_ae_session_selection and sets
+# assigned_extended_ae_email; that work has to surface for the assignee.
+# ---------------------------------------------------------------------------
+def get_delegated_to_extended(extended_ae_email: str, from_date: date, to_date: date) -> pd.DataFrame:
+    """Sessions a Core AE claimed and assigned TO this Extended AE."""
+    sql = text(
+        """
+        SELECT id, core_ae_email, session_date, slot_time, module, batch_code,
+               status, assigned_extended_ae_email
+        FROM core_ae_session_selection
+        WHERE assigned_extended_ae_email = :e
+          AND session_date BETWEEN :a AND :b
+        """
+    )
+    try:
+        with app_engine().connect() as conn:
+            return pd.read_sql(sql, conn, params={"e": extended_ae_email, "a": from_date, "b": to_date})
+    except Exception:
+        return pd.DataFrame()
+
+
+def get_visible_selections(role: str, email: str, from_date: date, to_date: date) -> pd.DataFrame:
+    """
+    Everything this user should see as 'theirs' for the period.
+
+      core_ae / admin -> their own core_ae_session_selection rows
+      extended_ae     -> their own claims  +  anything delegated to them
+
+    Returns columns: session_date, slot_time, batch_code, status, source
+    where source is 'own' or 'delegated'.
+    """
+    own = get_selections_for_role(role, email, from_date, to_date)
+    if not own.empty:
+        own = own[["session_date", "slot_time", "batch_code", "status"]].copy()
+        own["source"] = "own"
+        own["delegated_by"] = None
+
+    if role != "extended_ae":
+        return own if not own.empty else pd.DataFrame(
+            columns=["session_date", "slot_time", "batch_code", "status", "source", "delegated_by"]
+        )
+
+    deleg = get_delegated_to_extended(email, from_date, to_date)
+    if not deleg.empty:
+        deleg = deleg[["session_date", "slot_time", "batch_code", "status", "core_ae_email"]].copy()
+        deleg = deleg.rename(columns={"core_ae_email": "delegated_by"})
+        deleg["source"] = "delegated"
+
+    frames = [f for f in (own, deleg) if f is not None and not f.empty]
+    if not frames:
+        return pd.DataFrame(
+            columns=["session_date", "slot_time", "batch_code", "status", "source", "delegated_by"]
+        )
+    out = pd.concat(frames, ignore_index=True)
+    # if a session is both owned and delegated, the user's own row wins
+    out = out.drop_duplicates(subset=["session_date", "slot_time", "batch_code"], keep="first")
+    return out
