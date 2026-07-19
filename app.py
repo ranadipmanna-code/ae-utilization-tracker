@@ -57,9 +57,15 @@ THEMES = {
 }
 
 
-def _css(t: dict) -> str:
+def _css(t: dict, name: str = "light") -> str:
     return f"""
     <style>
+      /* Tell the browser this page has an intentional, fully-styled color
+         scheme. Without this, Chrome/Android's automatic dark theme can
+         decide to force-invert freshly injected HTML (like the sessions
+         table below) even though every color here is set explicitly —
+         which is why the table could render black under the Light skin. */
+      html {{ color-scheme: {name}; }}
       html, body, [data-testid="stAppViewContainer"], .stApp {{
         background:{t['bg']} !important; color:{t['text']} !important;
         font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
@@ -312,36 +318,78 @@ def _css(t: dict) -> str:
       .dbdot {{ font-size:.75rem; color:{t['muted']}; margin-top:14px; }}
 
       hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
-      /* ---------- DATA EDITOR / DATAFRAME ----------
-         Streamlit renders these with glide-data-grid, which ships its own dark
-         palette and ignores the app theme. Drive it via its CSS variables. */
-      .stDataFrame, [data-testid="stDataFrame"],
-      .stDataEditor, [data-testid="stDataEditor"] {{
+      /* ---------- SESSION TABLE (themed HTML, not the canvas grid) ---------- */
+      .stDataFrame, [data-testid="stDataFrame"] {{
         border:1px solid {t['border']}; border-radius:10px; overflow:hidden;
-        --gdg-bg-cell: {t['surface']};
-        --gdg-bg-cell-medium: {t['surface_2']};
-        --gdg-bg-header: {t['surface_2']};
-        --gdg-bg-header-has-focus: {t['chip_bg']};
-        --gdg-bg-header-hovered: {t['chip_bg']};
-        --gdg-text-dark: {t['text']};
-        --gdg-text-medium: {t['muted']};
-        --gdg-text-light: {t['muted']};
-        --gdg-text-header: {t['muted']};
-        --gdg-text-header-selected: {t['text']};
-        --gdg-border-color: {t['border']};
-        --gdg-horizontal-border-color: {t['border']};
-        --gdg-accent-color: {t['accent']};
-        --gdg-accent-fg: #ffffff;
-        --gdg-accent-light: {t['accent_soft']};
-        --gdg-bg-bubble: {t['surface']};
-        --gdg-bg-bubble-selected: {t['accent_soft']};
-        --gdg-bg-search-result: {t['avail_bg']};
-        --gdg-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
       }}
-      /* the editable dropdown overlay inside the grid */
-      .gdg-style, .gdg-growing-entry, [class*="gdg-"] {{
-        background-color:{t['surface']} !important; color:{t['text']} !important;
+      .sess-table-wrap {{
+        border:1px solid {t['border']}; border-radius:12px; overflow:hidden;
+        margin-bottom:14px; color-scheme:{name}; forced-color-adjust:none;
       }}
+      .sess-table {{
+        width:100%; border-collapse:collapse; font-size:.86rem;
+        background:{t['surface']}; color:{t['text']}; forced-color-adjust:none;
+      }}
+      .sess-table thead th {{
+        text-align:left; padding:11px 14px; font-weight:600; font-size:.76rem;
+        text-transform:uppercase; letter-spacing:.03em;
+        color:{t['muted']}; background:{t['surface_2']};
+        border-bottom:1px solid {t['border']}; position:sticky; top:0;
+      }}
+      .sess-table tbody td {{
+        padding:10px 14px; border-bottom:1px solid {t['border']};
+        color:{t['text']};
+      }}
+      .sess-table tbody tr:last-child td {{ border-bottom:none; }}
+      .sess-table tbody tr:hover {{ background:{t['surface_2']}; }}
+      .sess-table tr.row-claimed {{ background:{t['claim_bg']}; }}
+      .sess-table tr.row-deleg   {{ background:{t['done_bg']}; }}
+
+      .st {{ display:inline-block; padding:2px 9px; border-radius:980px;
+             font-size:.72rem; font-weight:600; }}
+      .st-conf {{ background:{t['claim_border']}; color:#04301f; }}
+      .st-sel  {{ background:{t['claim_border']}; color:#04301f; }}
+      .st-cho  {{ background:{t['accent']}; color:#fff; }}
+      .st-non  {{ background:{t['chip_bg']}; color:{t['muted']}; }}
+
+      /* ---------- facts panel ---------- */      /* ---------- facts panel ---------- */
+      .eval-facts {{
+        background:{t['surface_2']}; border:1px solid {t['border']};
+        border-radius:10px; padding:14px 16px; margin-bottom:16px;
+      }}
+      .eval-facts-title {{
+        font-size:.74rem; font-weight:700; text-transform:uppercase;
+        letter-spacing:.05em; color:{t['muted']}; margin-bottom:10px;
+      }}
+      .eval-grid {{
+        display:grid; grid-template-columns:repeat(3, 1fr); gap:10px 18px;
+      }}
+      .eval-grid > div {{ display:flex; flex-direction:column; }}
+      .ef-k {{
+        font-size:.7rem; font-weight:600; text-transform:uppercase;
+        letter-spacing:.04em; color:{t['muted']}; margin-bottom:2px;
+      }}
+      .ef-v {{ font-size:.9rem; font-weight:600; color:{t['text']}; }}
+      .ef-sid {{
+        margin-top:12px; padding-top:10px; border-top:1px solid {t['border']};
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:.72rem; color:{t['muted']}; word-break:break-all;
+      }}
+      .ef-sid .ef-k {{ display:block; margin-bottom:3px; }}
+
+      /* day group heading */
+      .day-head {{
+        font-size:.76rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+        color:{t['muted']}; margin:18px 0 8px; padding-bottom:5px;
+        border-bottom:1px solid {t['border']};
+      }}
+
+      /* ---------- LOGIN ---------- */
+      .login-title {{ font-size:1.9rem; font-weight:700; letter-spacing:-.03em; margin-bottom:6px; }}
+      .login-sub {{ color:{t['muted']}; font-size:.88rem; margin-bottom:24px; }}
+      .dbdot {{ font-size:.75rem; color:{t['muted']}; margin-top:14px; }}
+
+      hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
       [data-testid="stAlert"] {{ border-radius:10px; }}
       div[role="radiogroup"] label {{ font-size:.85rem; }}
     </style>
@@ -351,7 +399,7 @@ def _css(t: dict) -> str:
 def apply_theme():
     if "theme" not in st.session_state:
         st.session_state.theme = "light"
-    st.markdown(_css(THEMES[st.session_state.theme]), unsafe_allow_html=True)
+    st.markdown(_css(THEMES[st.session_state.theme], st.session_state.theme), unsafe_allow_html=True)
 
 
 STATUS_OPTIONS = ["Not Selected", "Choosing", "Selected", "Confirmed"]
@@ -768,9 +816,9 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     """
     CHANGE #6 — performance.
     The old version rendered a st.selectbox + st.expander PER ROW (~50 widgets
-    per page), and every interaction reran the whole script. This uses ONE
-    st.data_editor for the entire page instead: a single widget, one rerun on
-    submit, no per-row Python loop.
+    per page), and every interaction reran the whole script. This renders a
+    single themed HTML table (fast, follows light/dark) plus one form to update
+    rows in a batch — no per-row widgets, one rerun on save.
 
     CHANGE #1 — an Extended AE also sees sessions delegated to them by their
     Core AE, marked with source='delegated'.
@@ -842,55 +890,81 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     lo = (int(page) - 1) * PER_PAGE
     chunk = df.iloc[lo:lo + PER_PAGE].copy()
 
-    show_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Origin", "Status"]
-    editable = chunk[show_cols].copy()
+    # ---- render as a themed HTML table (fast, follows light/dark) ----
+    st.caption("📥 = delegated to you by your Core AE.")
 
-    st.caption(
-        "Set **Status** on any row, then press **Save changes**. "
-        "📥 = delegated to you by your Core AE."
+    header = "".join(f"<th>{c}</th>" for c in
+                     ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Origin", "Status"])
+    body_rows = []
+    for _, r in chunk.iterrows():
+        claimed_row = r["Status"] in CLAIMED
+        deleg_row = r["_source"] == "delegated"
+        cls = "row-claimed" if claimed_row else ("row-deleg" if deleg_row else "")
+        badge_map = {
+            "Confirmed": '<span class="st st-conf">Confirmed</span>',
+            "Selected": '<span class="st st-sel">Selected</span>',
+            "Choosing": '<span class="st st-cho">Choosing</span>',
+            "Not Selected": '<span class="st st-non">Not Selected</span>',
+        }
+        cells = [
+            r["Trainer"], r["Date"], r["Time"], r["Duration"], r["Batch"],
+            r["Program"], r["Origin"], badge_map.get(r["Status"], r["Status"]),
+        ]
+        tds = "".join(f"<td>{c}</td>" for c in cells)
+        body_rows.append(f'<tr class="{cls}">{tds}</tr>')
+    st.markdown(
+        f'<div class="sess-table-wrap"><table class="sess-table">'
+        f"<thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>",
+        unsafe_allow_html=True,
     )
 
-    edited = st.data_editor(
-        editable,
-        key=f"editor_{page}",
-        use_container_width=True,
-        hide_index=True,
-        height=min(560, 46 + 35 * len(editable)),
-        disabled=[c for c in show_cols if c != "Status"] if can_select else show_cols,
-        column_config={
-            "Status": st.column_config.SelectboxColumn(
-                "Status", options=STATUS_OPTIONS, required=True, width="medium"
-            ),
-            "Program": st.column_config.TextColumn("Program", width="medium"),
-            "Origin": st.column_config.TextColumn("Origin", width="small"),
-        },
-    )
+    # ---- editing panel: pick rows, set a status, save once ----
+    if can_select:
+        with st.form(f"edit_form_{page}"):
+            st.markdown("**Update sessions**")
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                # label each row so the user can pick which to change
+                labels = {
+                    f"{r['Trainer']} · {r['Date']} · {r['Time']} · {r['Batch']}": idx
+                    for idx, (_, r) in enumerate(chunk.iterrows())
+                }
+                picks = st.multiselect(
+                    "Rows to update", list(labels.keys()),
+                    help="Choose one or more sessions, set the new status, then Save.",
+                )
+            with c2:
+                new_status = st.selectbox("Set status to", STATUS_OPTIONS, index=2)  # default 'Selected'
+            saved = st.form_submit_button("💾  Save changes", type="primary")
 
-    if can_select and st.button("💾  Save changes", type="primary"):
-        changes = 0
-        for i, (_, orig) in enumerate(chunk.iterrows()):
-            new_status = edited.iloc[i]["Status"]
-            if new_status == orig["Status"]:
-                continue
-            db.upsert_selection_for_role(
-                role, user_email, orig["_date"], orig["slot_time"],
-                orig["m_code"], orig["batch_code"], new_status,
-            )
-            db.set_highlight_flag(
-                orig["_date"], orig["slot_time"], orig["batch_code"],
-                core_ae_email, user_email, new_status in CLAIMED,
-            )
-            changes += 1
-        if changes:
-            try:
-                db.recompute_weekly_summary(core_ae_email, date_from)
-            except Exception:
-                pass
-            st.cache_data.clear()
-            st.success(f"Saved {changes} change{'s' if changes != 1 else ''}.")
-            st.rerun()
-        else:
-            st.info("Nothing changed.")
+        if saved and picks:
+            rows_list = list(chunk.iterrows())
+            changes = 0
+            for label in picks:
+                _, orig = rows_list[labels[label]]
+                if new_status == orig["Status"]:
+                    continue
+                db.upsert_selection_for_role(
+                    role, user_email, orig["_date"], orig["slot_time"],
+                    orig["m_code"], orig["batch_code"], new_status,
+                )
+                db.set_highlight_flag(
+                    orig["_date"], orig["slot_time"], orig["batch_code"],
+                    core_ae_email, user_email, new_status in CLAIMED,
+                )
+                changes += 1
+            if changes:
+                try:
+                    db.recompute_weekly_summary(core_ae_email, date_from)
+                except Exception:
+                    pass
+                st.cache_data.clear()
+                st.success(f"Saved {changes} change{'s' if changes != 1 else ''}.")
+                st.rerun()
+            else:
+                st.info("Those rows already have that status.")
+        elif saved and not picks:
+            st.info("Pick at least one row first.")
 
 
 def _team_rollup(core_ae_email, week_start, week_end):
