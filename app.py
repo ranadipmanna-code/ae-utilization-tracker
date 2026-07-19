@@ -312,7 +312,36 @@ def _css(t: dict) -> str:
       .dbdot {{ font-size:.75rem; color:{t['muted']}; margin-top:14px; }}
 
       hr, [data-testid="stDivider"] {{ border-color:{t['border']} !important; }}
-      .stDataFrame {{ border:1px solid {t['border']}; border-radius:10px; overflow:hidden; }}
+      /* ---------- DATA EDITOR / DATAFRAME ----------
+         Streamlit renders these with glide-data-grid, which ships its own dark
+         palette and ignores the app theme. Drive it via its CSS variables. */
+      .stDataFrame, [data-testid="stDataFrame"],
+      .stDataEditor, [data-testid="stDataEditor"] {{
+        border:1px solid {t['border']}; border-radius:10px; overflow:hidden;
+        --gdg-bg-cell: {t['surface']};
+        --gdg-bg-cell-medium: {t['surface_2']};
+        --gdg-bg-header: {t['surface_2']};
+        --gdg-bg-header-has-focus: {t['chip_bg']};
+        --gdg-bg-header-hovered: {t['chip_bg']};
+        --gdg-text-dark: {t['text']};
+        --gdg-text-medium: {t['muted']};
+        --gdg-text-light: {t['muted']};
+        --gdg-text-header: {t['muted']};
+        --gdg-text-header-selected: {t['text']};
+        --gdg-border-color: {t['border']};
+        --gdg-horizontal-border-color: {t['border']};
+        --gdg-accent-color: {t['accent']};
+        --gdg-accent-fg: #ffffff;
+        --gdg-accent-light: {t['accent_soft']};
+        --gdg-bg-bubble: {t['surface']};
+        --gdg-bg-bubble-selected: {t['accent_soft']};
+        --gdg-bg-search-result: {t['avail_bg']};
+        --gdg-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      }}
+      /* the editable dropdown overlay inside the grid */
+      .gdg-style, .gdg-growing-entry, [class*="gdg-"] {{
+        background-color:{t['surface']} !important; color:{t['text']} !important;
+      }}
       [data-testid="stAlert"] {{ border-radius:10px; }}
       div[role="radiogroup"] label {{ font-size:.85rem; }}
     </style>
@@ -550,6 +579,15 @@ def _sessions_tab(user, role):
         with d3:
             only_open = st.selectbox("Show", ["All sessions", "Unclaimed only", "My claims only"])
 
+        # CMIS splits a long class into consecutive 30-min rows (same trainer,
+        # same batch, back-to-back). Merging them shows one row per real class.
+        merge_slots = st.checkbox(
+            "Merge back-to-back slots into one class",
+            value=False,
+            help="CMIS records a 2-hour class as four 30-minute rows. "
+                 "Tick this to collapse consecutive slots for the same trainer & batch.",
+        )
+
     if pick_trainer != "All trainers":
         sessions = sessions[sessions["_trainer"] == pick_trainer]
     if pick_batch != "All batches":
@@ -578,6 +616,9 @@ def _sessions_tab(user, role):
 
     # NOTE: no row cap here — pagination in _sessions_table handles volume,
     # so the metrics and page count reflect the TRUE filtered total.
+    if merge_slots:
+        sessions = _merge_consecutive(sessions)
+
     _sessions_table(sessions, core_ae_email, date_from, date_to, role, user["email"])
 
 
@@ -616,6 +657,111 @@ def _badge(status: str, claimed: bool) -> str:
     if status == "Choosing":
         return '<span class="badge badge-choosing">⏳ Choosing</span>'
     return '<span class="badge badge-available">◷ Available</span>'
+
+
+def _merge_consecutive(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collapse back-to-back CMIS slots into one row per class.
+
+    CMIS stores a 2-hour class as four consecutive 30-minute rows with the same
+    trainer, batch and date. This groups those into a single row whose
+    slot_time spans start->end, so the list reflects real classes.
+    """
+    if df.empty:
+        return df
+
+    d = df.copy()
+    d["_start"] = d["slot_time"].map(
+        lambda s: str(s).split("-")[0].strip() if s and "-" in str(s) else str(s)
+    )
+    d["_sort"] = pd.to_datetime(d["_start"], format="%I:%M %p", errors="coerce")
+    d = d.sort_values(["email_id", "_date", "batch_code", "_sort"])
+
+    out, run = [], []
+
+    def flush(run_rows):
+        if not run_rows:
+            return
+        first, last = run_rows[0], run_rows[-1]
+        merged = dict(first)
+        if len(run_rows) > 1:
+            s = str(first["slot_time"]).split("-")[0].strip()
+            e = str(last["slot_time"]).split("-")[-1].strip()
+            merged["slot_time"] = f"{s} - {e}"
+            tot = 0.0
+            for r in run_rows:
+                try:
+                    tot += float(r.get("time_duration") or 0)
+                except (TypeError, ValueError):
+                    pass
+            merged["time_duration"] = tot if tot > 0 else first.get("time_duration")
+            merged["_merged_count"] = len(run_rows)
+        else:
+            merged["_merged_count"] = 1
+        out.append(merged)
+
+    prev = None
+    for _, r in d.iterrows():
+        r = r.to_dict()
+        if prev is not None:
+            same = (
+                r["email_id"] == prev["email_id"]
+                and r["_date"] == prev["_date"]
+                and r["batch_code"] == prev["batch_code"]
+            )
+            prev_end = str(prev["slot_time"]).split("-")[-1].strip()
+            this_start = str(r["slot_time"]).split("-")[0].strip()
+            contiguous = same and prev_end == this_start
+            if not contiguous:
+                flush(run)
+                run = []
+        run.append(r)
+        prev = r
+    flush(run)
+
+    res = pd.DataFrame(out)
+    return res.drop(columns=["_start", "_sort"], errors="ignore")
+
+
+def _parse_slot_minutes(slot: str) -> int | None:
+    """Derive minutes from a slot string like '02:00 PM - 02:30 PM'."""
+    if not slot or "-" not in str(slot):
+        return None
+    try:
+        a, b = [s.strip() for s in str(slot).split("-", 1)]
+        t1 = pd.to_datetime(a, format="%I:%M %p")
+        t2 = pd.to_datetime(b, format="%I:%M %p")
+        mins = int((t2 - t1).total_seconds() // 60)
+        return mins if mins > 0 else None
+    except Exception:
+        return None
+
+
+def _fmt_duration(r) -> str:
+    """
+    Human-readable duration.
+    CMIS `time_duration` is decimal HOURS (0.5 -> 30 min). Prefer it; if it's
+    absent or doesn't agree with the slot, fall back to the slot arithmetic.
+    """
+    mins = None
+    raw = r.get("time_duration")
+    try:
+        if raw is not None and str(raw).strip() != "":
+            hours = float(raw)
+            if hours > 0:
+                mins = int(round(hours * 60))
+    except (TypeError, ValueError):
+        mins = None
+
+    if mins is None:
+        mins = _parse_slot_minutes(r.get("slot_time"))
+    if mins is None:
+        return "—"
+
+    if mins < 60:
+        return f"{mins} min"
+    h, m = divmod(mins, 60)
+    return f"{h}h" if m == 0 else f"{h}h {m}m"
 
 
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
@@ -661,7 +807,10 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     df["Trainer"] = (df["f_name"].fillna("") + " " + df["l_name"].fillna("")).str.strip()
     df["Date"] = pd.to_datetime(df["_date"]).dt.strftime("%a %d %b")
     df["Time"] = df["slot_time"]
-    df["Duration"] = df.get("time_duration", pd.Series([""] * len(df)))
+    # CMIS stores time_duration in DECIMAL HOURS (0.5 = 30 min), which reads as
+    # a meaningless "0.5" in the table. Show minutes instead, and fall back to
+    # deriving it from slot_time when time_duration is missing/odd.
+    df["Duration"] = df.apply(lambda r: _fmt_duration(r), axis=1)
     df["Batch"] = df["batch_code"]
     df["Program"] = df["program_name"]
 
