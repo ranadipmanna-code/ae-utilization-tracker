@@ -807,12 +807,17 @@ def _sessions_tab(user, role):
 
         d1, d2, d3 = st.columns(3)
         default_from = max(lo_d, date.today())
+        # allow the picker to reach CMIS's global max (e.g. Oct 2027), not just
+        # this AE's own last session — so future dates are always selectable.
+        g_lo, g_hi = db.cmis_date_bounds()
+        pick_min = g_lo or lo_d
+        pick_max = g_hi or hi_d
         with d1:
-            date_from = st.date_input("From", value=default_from, min_value=lo_d, max_value=hi_d)
+            date_from = st.date_input("From", value=default_from, min_value=pick_min, max_value=pick_max)
         with d2:
             date_to = st.date_input(
                 "To", value=min(hi_d, default_from + timedelta(days=13)),
-                min_value=lo_d, max_value=hi_d,
+                min_value=pick_min, max_value=pick_max,
             )
         with d3:
             only_open = st.selectbox("Show", ["All sessions", "Unclaimed only", "My claims only"])
