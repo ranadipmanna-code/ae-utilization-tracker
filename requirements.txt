@@ -1,4 +1,4 @@
-streamlit==1.40.2
+streamlit==1.48.1
 sqlalchemy==2.0.36
 pymysql==1.1.1
 cryptography==43.0.3
