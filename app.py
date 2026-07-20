@@ -785,92 +785,99 @@ def _parse_slot_minutes(slot: str) -> int | None:
         return None
 
 
-def _fmt_duration(r) -> str:
-    """
-    Human-readable duration.
-    CMIS `time_duration` is decimal HOURS (0.5 -> 30 min). Prefer it; if it's
-    absent or doesn't agree with the slot, fall back to the slot arithmetic.
-    """
-    mins = None
-    raw = r.get("time_duration")
-    try:
-        if raw is not None and str(raw).strip() != "":
-            hours = float(raw)
-            if hours > 0:
-                mins = int(round(hours * 60))
-    except (TypeError, ValueError):
-        mins = None
-
-    if mins is None:
-        mins = _parse_slot_minutes(r.get("slot_time"))
-    if mins is None:
-        return "—"
-
+def _mins_to_text(mins: int) -> str:
     if mins < 60:
         return f"{mins} min"
     h, m = divmod(mins, 60)
     return f"{h}h" if m == 0 else f"{h}h {m}m"
 
 
+def _cmis_duration_minutes(r) -> int | None:
+    """The authoritative CMIS duration, in minutes.
+
+    CMIS `time_duration` is stored in DECIMAL HOURS (0.5 = 30 min). This is the
+    field of record, so we always trust it when present. Only when it's
+    missing/blank do we derive from the slot string.
+    """
+    raw = r.get("time_duration")
+    try:
+        if raw is not None and str(raw).strip() != "":
+            hours = float(raw)
+            if hours > 0:
+                return int(round(hours * 60))
+    except (TypeError, ValueError):
+        pass
+    return _parse_slot_minutes(r.get("slot_time"))
+
+
+def _fmt_duration(r) -> str:
+    """
+    Duration shown in the table — taken DIRECTLY from CMIS `time_duration`
+    (converted hours->minutes) so it always matches the CMIS record. Falls back
+    to slot arithmetic only when CMIS has no value.
+    """
+    mins = _cmis_duration_minutes(r)
+    return _mins_to_text(mins) if mins is not None else "—"
+
+
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
     """
-    CHANGE #6 — performance.
-    The old version rendered a st.selectbox + st.expander PER ROW (~50 widgets
-    per page), and every interaction reran the whole script. This renders a
-    single themed HTML table (fast, follows light/dark) plus one form to update
-    rows in a batch — no per-row widgets, one rerun on save.
-
-    CHANGE #1 — an Extended AE also sees sessions delegated to them by their
-    Core AE, marked with source='delegated'.
+    Inline editing via st.data_editor (Status column editable in the table).
+    Cross-visibility: the Core AE and their Extended AEs all SEE each other's
+    selections ("claimed by X"); only the owner may change a claimed row.
     """
     can_select = role in ("extended_ae", "core_ae", "admin")
 
-    # what this user already owns / has been given
-    visible = db.get_visible_selections(role, user_email, date_from, date_to)
-    status_by_key, source_by_key, by_whom = {}, {}, {}
-    if not visible.empty:
-        for _, s in visible.iterrows():
+    # team-wide selections: everyone on this Core AE's team sees everyone's picks
+    team = db.get_team_selections(core_ae_email, date_from, date_to)
+    status_by_key, owner_by_key, ownrole_by_key = {}, {}, {}
+    if not team.empty:
+        for _, s in team.iterrows():
             k = f"{s['session_date']}|{s['slot_time']}|{s['batch_code'] or ''}"
             status_by_key[k] = s["status"]
-            source_by_key[k] = s.get("source", "own")
-            by_whom[k] = s.get("delegated_by")
+            owner_by_key[k] = s["owner_email"]
+            ownrole_by_key[k] = s["owner_role"]
 
     df = sessions.copy()
     df["_key"] = df.apply(
         lambda r: f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", axis=1
     )
     df["Status"] = df["_key"].map(lambda k: status_by_key.get(k, "Not Selected"))
-    df["_source"] = df["_key"].map(lambda k: source_by_key.get(k, ""))
-    df["_by"] = df["_key"].map(lambda k: by_whom.get(k))
+    df["_owner"] = df["_key"].map(lambda k: owner_by_key.get(k))
+    df["_ownrole"] = df["_key"].map(lambda k: ownrole_by_key.get(k))
 
-    def _origin(r):
-        if r["_source"] == "delegated":
-            who = (r["_by"] or "").split("@")[0]
-            return f"📥 from {who}"
-        if r["_source"] == "own":
-            return "✔ mine"
-        return ""
+    def _claimed_by(r):
+        o = r["_owner"]
+        if not o or r["Status"] == "Not Selected":
+            return ""
+        if o.lower() == user_email.lower():
+            return "✔ me"
+        who = o.split("@")[0]
+        tag = "CoreAE" if r["_ownrole"] == "core_ae" else "ExtAE"
+        return f"🔒 {who} ({tag})"
 
-    df["Origin"] = df.apply(_origin, axis=1)
+    df["Claimed by"] = df.apply(_claimed_by, axis=1)
     df["Trainer"] = (df["f_name"].fillna("") + " " + df["l_name"].fillna("")).str.strip()
     df["Date"] = pd.to_datetime(df["_date"]).dt.strftime("%a %d %b")
     df["Time"] = df["slot_time"]
-    # CMIS stores time_duration in DECIMAL HOURS (0.5 = 30 min), which reads as
-    # a meaningless "0.5" in the table. Show minutes instead, and fall back to
-    # deriving it from slot_time when time_duration is missing/odd.
     df["Duration"] = df.apply(lambda r: _fmt_duration(r), axis=1)
     df["Batch"] = df["batch_code"]
     df["Program"] = df["program_name"]
 
+    # a row is editable only if unclaimed OR owned by this user
+    df["_editable"] = df.apply(
+        lambda r: (not r["_owner"]) or (r["_owner"].lower() == user_email.lower()), axis=1
+    )
+
     total = len(df)
     claimed = int(df["Status"].isin(list(CLAIMED)).sum())
-    delegated = int((df["_source"] == "delegated").sum())
+    mine = int(df["_owner"].apply(lambda o: bool(o) and o.lower() == user_email.lower()).sum())
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Sessions", f"{total:,}")
-    m2.metric("Claimed", claimed)
+    m2.metric("Claimed (team)", claimed)
     m3.metric("Available", total - claimed)
-    m4.metric("Delegated to me", delegated)
+    m4.metric("Mine", mine)
 
     PER_PAGE = 50
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
@@ -888,83 +895,69 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
         page = 1
 
     lo = (int(page) - 1) * PER_PAGE
-    chunk = df.iloc[lo:lo + PER_PAGE].copy()
+    chunk = df.iloc[lo:lo + PER_PAGE].copy().reset_index(drop=True)
 
-    # ---- render as a themed HTML table (fast, follows light/dark) ----
-    st.caption("📥 = delegated to you by your Core AE.")
-
-    header = "".join(f"<th>{c}</th>" for c in
-                     ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Origin", "Status"])
-    body_rows = []
-    for _, r in chunk.iterrows():
-        claimed_row = r["Status"] in CLAIMED
-        deleg_row = r["_source"] == "delegated"
-        cls = "row-claimed" if claimed_row else ("row-deleg" if deleg_row else "")
-        badge_map = {
-            "Confirmed": '<span class="st st-conf">Confirmed</span>',
-            "Selected": '<span class="st st-sel">Selected</span>',
-            "Choosing": '<span class="st st-cho">Choosing</span>',
-            "Not Selected": '<span class="st st-non">Not Selected</span>',
-        }
-        cells = [
-            r["Trainer"], r["Date"], r["Time"], r["Duration"], r["Batch"],
-            r["Program"], r["Origin"], badge_map.get(r["Status"], r["Status"]),
-        ]
-        tds = "".join(f"<td>{c}</td>" for c in cells)
-        body_rows.append(f'<tr class="{cls}">{tds}</tr>')
-    st.markdown(
-        f'<div class="sess-table-wrap"><table class="sess-table">'
-        f"<thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>",
-        unsafe_allow_html=True,
+    st.caption(
+        "Set **Status** on any row you own, then **Save changes**. "
+        "🔒 = claimed by a teammate (you can see it but not change it)."
     )
 
-    # ---- editing panel: pick rows, set a status, save once ----
-    if can_select:
-        with st.form(f"edit_form_{page}"):
-            st.markdown("**Update sessions**")
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                # label each row so the user can pick which to change
-                labels = {
-                    f"{r['Trainer']} · {r['Date']} · {r['Time']} · {r['Batch']}": idx
-                    for idx, (_, r) in enumerate(chunk.iterrows())
-                }
-                picks = st.multiselect(
-                    "Rows to update", list(labels.keys()),
-                    help="Choose one or more sessions, set the new status, then Save.",
-                )
-            with c2:
-                new_status = st.selectbox("Set status to", STATUS_OPTIONS, index=2)  # default 'Selected'
-            saved = st.form_submit_button("💾  Save changes", type="primary")
+    view_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Claimed by", "Status"]
+    editable_view = chunk[view_cols].copy()
 
-        if saved and picks:
-            rows_list = list(chunk.iterrows())
-            changes = 0
-            for label in picks:
-                _, orig = rows_list[labels[label]]
-                if new_status == orig["Status"]:
-                    continue
-                db.upsert_selection_for_role(
-                    role, user_email, orig["_date"], orig["slot_time"],
-                    orig["m_code"], orig["batch_code"], new_status,
-                )
-                db.set_highlight_flag(
-                    orig["_date"], orig["slot_time"], orig["batch_code"],
-                    core_ae_email, user_email, new_status in CLAIMED,
-                )
-                changes += 1
-            if changes:
-                try:
-                    db.recompute_weekly_summary(core_ae_email, date_from)
-                except Exception:
-                    pass
-                st.cache_data.clear()
-                st.success(f"Saved {changes} change{'s' if changes != 1 else ''}.")
-                st.rerun()
-            else:
-                st.info("Those rows already have that status.")
-        elif saved and not picks:
-            st.info("Pick at least one row first.")
+    # rows claimed by someone else must not be edited — if the whole page has a
+    # mix, we disable editing per-row by blanking the Status options isn't
+    # possible in data_editor, so we validate on save and reject locked rows.
+    edited = st.data_editor(
+        editable_view,
+        key=f"editor_{page}",
+        use_container_width=True,
+        hide_index=True,
+        height=min(600, 46 + 35 * len(editable_view)),
+        disabled=[c for c in view_cols if c != "Status"] if can_select else view_cols,
+        column_config={
+            "Status": st.column_config.SelectboxColumn(
+                "Status", options=STATUS_OPTIONS, required=True, width="small"
+            ),
+            "Program": st.column_config.TextColumn("Program", width="medium"),
+            "Claimed by": st.column_config.TextColumn("Claimed by", width="small"),
+        },
+    )
+
+    if can_select and st.button("💾  Save changes", type="primary"):
+        changes, blocked = 0, 0
+        for i in range(len(chunk)):
+            orig = chunk.iloc[i]
+            new_status = edited.iloc[i]["Status"]
+            if new_status == orig["Status"]:
+                continue
+            if not orig["_editable"]:
+                blocked += 1  # claimed by a teammate — reject
+                continue
+            db.upsert_selection_for_role(
+                role, user_email, orig["_date"], orig["slot_time"],
+                orig["m_code"], orig["batch_code"], new_status,
+            )
+            db.set_highlight_flag(
+                orig["_date"], orig["slot_time"], orig["batch_code"],
+                core_ae_email, user_email, new_status in CLAIMED,
+            )
+            changes += 1
+        if changes:
+            try:
+                db.recompute_weekly_summary(core_ae_email, date_from)
+            except Exception:
+                pass
+            st.cache_data.clear()
+            msg = f"Saved {changes} change{'s' if changes != 1 else ''}."
+            if blocked:
+                msg += f" Skipped {blocked} row(s) claimed by teammates."
+            st.success(msg)
+            st.rerun()
+        elif blocked:
+            st.warning(f"Those {blocked} row(s) are claimed by teammates — only they can change them.")
+        else:
+            st.info("Nothing changed.")
 
 
 def _team_rollup(core_ae_email, week_start, week_end):
