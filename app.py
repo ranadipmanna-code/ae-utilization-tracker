@@ -312,6 +312,38 @@ def _css(t: dict, name: str = "light") -> str:
       .lg-mine  {{ background:{t['accent']}; color:#fff; }}
       .lg-lock  {{ background:{t['chip_bg']}; color:{t['muted']}; }}
 
+      /* ---------- SESSION CARDS (daily-use list) ---------- */
+      .slot-head {{
+        font-size:.82rem; font-weight:650; letter-spacing:-.01em; color:{t['text']};
+        margin:18px 0 8px; padding-bottom:6px; border-bottom:1px solid {t['border']};
+      }}
+      .slot-count {{
+        float:right; font-size:.72rem; font-weight:500; color:{t['muted']};
+        background:{t['surface_2']}; padding:1px 9px; border-radius:980px;
+      }}
+      .scard {{
+        border-radius:12px; padding:12px 15px; margin-bottom:8px;
+        border:1px solid {t['border']}; background:{t['surface']};
+        border-left:3px solid {t['border']};
+        transition:transform .1s ease, box-shadow .1s ease;
+      }}
+      .scard:hover {{ transform:translateX(2px); box-shadow:{t['shadow']}; }}
+      .scard-avail {{ border-left-color:{t['avail_border']}; }}
+      .scard-mine  {{ border-left-color:{t['accent']}; background:{t['done_bg']}; }}
+      .scard-lock  {{ border-left-color:{t['claim_border']}; background:{t['claim_bg']}; }}
+      .scard-top {{ font-size:.95rem; font-weight:600; letter-spacing:-.01em; color:{t['text']};
+                    display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+      .scard-sub {{ font-size:.79rem; color:{t['muted']}; margin-top:4px; }}
+      .scard-sub b {{ color:{t['text']}; font-weight:600; }}
+      .pill {{ font-size:.68rem; font-weight:600; padding:2px 9px; border-radius:980px; }}
+      .pill-avail {{ background:{t['avail_border']}; color:{t['avail_text']}; }}
+      .pill-mine  {{ background:{t['accent']}; color:#fff; }}
+      .pill-lock  {{ background:{t['claim_border']}; color:#04301f; }}
+      .locked-status {{
+        text-align:center; font-size:.8rem; font-weight:600; color:{t['muted']};
+        padding:9px 0;
+      }}
+
       /* ---------- SESSION ROW ---------- */
       .sess-card {{
         border-radius:10px; padding:11px 14px; margin-bottom:7px;
@@ -978,13 +1010,12 @@ def _fmt_duration(r) -> str:
 
 def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_email):
     """
-    Inline editing via st.data_editor (Status column editable in the table).
-    Cross-visibility: the Core AE and their Extended AEs all SEE each other's
-    selections ("claimed by X"); only the owner may change a claimed row.
+    Card-based session list, grouped by time slot. Each session is a clean card
+    with a one-tap claim control. Cross-visibility: everyone on the team sees
+    each other's picks; only the owner can change a claimed session.
     """
     can_select = role in ("extended_ae", "core_ae", "admin")
 
-    # team-wide selections: everyone on this Core AE's team sees everyone's picks
     team = db.get_team_selections(core_ae_email, date_from, date_to)
     status_by_key, owner_by_key, ownrole_by_key = {}, {}, {}
     if not team.empty:
@@ -995,32 +1026,12 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
             ownrole_by_key[k] = s["owner_role"]
 
     df = sessions.copy()
-    df["_key"] = df.apply(
-        lambda r: f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", axis=1
-    )
+    df["_key"] = df.apply(lambda r: f"{r['_date']}|{r['slot_time']}|{r['batch_code'] or ''}", axis=1)
     df["Status"] = df["_key"].map(lambda k: status_by_key.get(k, "Not Selected"))
     df["_owner"] = df["_key"].map(lambda k: owner_by_key.get(k))
     df["_ownrole"] = df["_key"].map(lambda k: ownrole_by_key.get(k))
-
-    def _claimed_by(r):
-        o = r["_owner"]
-        if not o or r["Status"] == "Not Selected":
-            return ""
-        if o.lower() == user_email.lower():
-            return "✔ me"
-        who = o.split("@")[0]
-        tag = "CoreAE" if r["_ownrole"] == "core_ae" else "ExtAE"
-        return f"🔒 {who} ({tag})"
-
-    df["Claimed by"] = df.apply(_claimed_by, axis=1).replace("", "—")
     df["Trainer"] = (df["f_name"].fillna("") + " " + df["l_name"].fillna("")).str.strip()
-    df["Date"] = pd.to_datetime(df["_date"]).dt.strftime("%a %d %b")
-    df["Time"] = df["slot_time"]
     df["Duration"] = df.apply(lambda r: _fmt_duration(r), axis=1)
-    df["Batch"] = df["batch_code"]
-    df["Program"] = df["program_name"]
-
-    # a row is editable only if unclaimed OR owned by this user
     df["_editable"] = df.apply(
         lambda r: (not r["_owner"]) or (r["_owner"].lower() == user_email.lower()), axis=1
     )
@@ -1030,26 +1041,29 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     mine = int(df["_owner"].apply(lambda o: bool(o) and o.lower() == user_email.lower()).sum())
     available = total - claimed
 
-    # visual stat cards (friendlier than plain metrics)
     st.markdown(
         f"""<div class="stat-row">
-          <div class="stat stat-total">
-            <div class="stat-num">{total:,}</div><div class="stat-lbl">Sessions</div>
-          </div>
-          <div class="stat stat-avail">
-            <div class="stat-num">{available:,}</div><div class="stat-lbl">◷ Available</div>
-          </div>
-          <div class="stat stat-claim">
-            <div class="stat-num">{claimed:,}</div><div class="stat-lbl">✓ Claimed by team</div>
-          </div>
-          <div class="stat stat-mine">
-            <div class="stat-num">{mine:,}</div><div class="stat-lbl">★ Mine</div>
-          </div>
+          <div class="stat stat-total"><div class="stat-num">{total:,}</div><div class="stat-lbl">Sessions</div></div>
+          <div class="stat stat-avail"><div class="stat-num">{available:,}</div><div class="stat-lbl">◷ Available</div></div>
+          <div class="stat stat-claim"><div class="stat-num">{claimed:,}</div><div class="stat-lbl">✓ Claimed by team</div></div>
+          <div class="stat stat-mine"><div class="stat-num">{mine:,}</div><div class="stat-lbl">★ Mine</div></div>
         </div>""",
         unsafe_allow_html=True,
     )
 
-    PER_PAGE = 50
+    st.markdown(
+        """<div class="help-strip">
+          <span><b>Tip:</b> pick a status on any available session, then <b>Save</b> at the bottom.</span>
+          <span class="legend">
+            <span class="lg lg-avail">◷ Available</span>
+            <span class="lg lg-mine">★ Mine</span>
+            <span class="lg lg-lock">🔒 Teammate's</span>
+          </span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    PER_PAGE = 40
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     if pages > 1:
         p1, p2 = st.columns([1, 4])
@@ -1067,74 +1081,87 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     lo = (int(page) - 1) * PER_PAGE
     chunk = df.iloc[lo:lo + PER_PAGE].copy().reset_index(drop=True)
 
-    st.markdown(
-        """<div class="help-strip">
-          <span><b>How to claim:</b> set a row's <b>Status</b>, then hit <b>Save changes</b>.</span>
-          <span class="legend">
-            <span class="lg lg-avail">◷ Available</span>
-            <span class="lg lg-mine">★ Mine</span>
-            <span class="lg lg-lock">🔒 Teammate's</span>
-          </span>
-        </div>""",
-        unsafe_allow_html=True,
-    )
+    # ---- render as cards grouped by (date, time slot) ----
+    pending = {}  # key -> chosen new status, collected then saved together
+    chunk["_group"] = chunk["_date"].astype(str) + " · " + chunk["slot_time"].astype(str)
 
-    view_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Claimed by", "Status"]
-    editable_view = chunk[view_cols].copy()
-
-    # Status is editable inline. Rows claimed by a teammate are validated and
-    # rejected on save (data_editor can't disable a single cell).
-    edited = st.data_editor(
-        editable_view,
-        key=f"editor_{page}",
-        use_container_width=True,
-        hide_index=True,
-        height=min(600, 46 + 36 * len(editable_view)),
-        disabled=[c for c in view_cols if c != "Status"] if can_select else view_cols,
-        column_config={
-            "Status": st.column_config.SelectboxColumn(
-                "Status", options=STATUS_OPTIONS, required=True, width="small"
-            ),
-            "Trainer": st.column_config.TextColumn("Trainer", width="medium"),
-            "Program": st.column_config.TextColumn("Program", width="medium"),
-            "Claimed by": st.column_config.TextColumn("Claimed by", width="small"),
-        },
-    )
-
-    if can_select and st.button("💾  Save changes", type="primary"):
-        changes, blocked = 0, 0
-        for i in range(len(chunk)):
-            orig = chunk.iloc[i]
-            new_status = edited.iloc[i]["Status"]
-            if new_status == orig["Status"]:
-                continue
-            if not orig["_editable"]:
-                blocked += 1  # claimed by a teammate — reject
-                continue
-            db.upsert_selection_for_role(
-                role, user_email, orig["_date"], orig["slot_time"],
-                orig["m_code"], orig["batch_code"], new_status,
+    with st.form(f"claim_form_{page}"):
+        for group_label, grp in chunk.groupby("_group", sort=False):
+            day = pd.to_datetime(grp.iloc[0]["_date"]).strftime("%A, %d %b")
+            slot = grp.iloc[0]["slot_time"]
+            st.markdown(
+                f"<div class='slot-head'>🕑 {day} &nbsp;·&nbsp; {slot} "
+                f"<span class='slot-count'>{len(grp)} session{'s' if len(grp)!=1 else ''}</span></div>",
+                unsafe_allow_html=True,
             )
-            db.set_highlight_flag(
-                orig["_date"], orig["slot_time"], orig["batch_code"],
-                core_ae_email, user_email, new_status in CLAIMED,
-            )
-            changes += 1
-        if changes:
+            for _, r in grp.iterrows():
+                key = r["_key"]
+                status = r["Status"]
+                owner = r["_owner"]
+                editable = r["_editable"]
+                claimed_row = status in CLAIMED
+
+                # ownership label
+                if owner and status != "Not Selected":
+                    if owner.lower() == user_email.lower():
+                        who = "<span class='pill pill-mine'>★ Mine</span>"
+                    else:
+                        nm = owner.split("@")[0]
+                        tag = "Core AE" if r["_ownrole"] == "core_ae" else "Ext AE"
+                        who = f"<span class='pill pill-lock'>🔒 {nm} · {tag}</span>"
+                elif not claimed_row:
+                    who = "<span class='pill pill-avail'>◷ Available</span>"
+                else:
+                    who = ""
+
+                cA, cB = st.columns([4, 1.3])
+                with cA:
+                    st.markdown(
+                        f"""<div class="scard {'scard-mine' if (owner and owner.lower()==user_email.lower()) else ('scard-lock' if claimed_row else 'scard-avail')}">
+                          <div class="scard-top">{r['Trainer']} {who}</div>
+                          <div class="scard-sub">{r['Duration']} · <b>{r['batch_code']}</b> · {r['program_name']}</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                with cB:
+                    if can_select and editable:
+                        sel = st.selectbox(
+                            "status", STATUS_OPTIONS,
+                            index=STATUS_OPTIONS.index(status) if status in STATUS_OPTIONS else 0,
+                            key=f"st_{key}_{page}", label_visibility="collapsed",
+                        )
+                        if sel != status:
+                            pending[key] = (sel, r)
+                    else:
+                        st.markdown(
+                            f"<div class='locked-status'>{status}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+        saved = st.form_submit_button("💾  Save changes", type="primary", use_container_width=True)
+
+    if saved:
+        if not pending:
+            st.info("No changes to save — pick a status on a session first.")
+        else:
+            n = 0
+            for key, (new_status, r) in pending.items():
+                db.upsert_selection_for_role(
+                    role, user_email, r["_date"], r["slot_time"],
+                    r["m_code"], r["batch_code"], new_status,
+                )
+                db.set_highlight_flag(
+                    r["_date"], r["slot_time"], r["batch_code"],
+                    core_ae_email, user_email, new_status in CLAIMED,
+                )
+                n += 1
             try:
                 db.recompute_weekly_summary(core_ae_email, date_from)
             except Exception:
                 pass
             st.cache_data.clear()
-            msg = f"Saved {changes} change{'s' if changes != 1 else ''}."
-            if blocked:
-                msg += f" Skipped {blocked} row(s) claimed by teammates."
-            st.success(msg)
+            st.success(f"Saved {n} change{'s' if n != 1 else ''}.")
             st.rerun()
-        elif blocked:
-            st.warning(f"Those {blocked} row(s) are claimed by teammates — only they can change them.")
-        else:
-            st.info("Nothing changed.")
 
 
 def _team_rollup(core_ae_email, week_start, week_end):
