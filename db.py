@@ -803,3 +803,48 @@ def get_visible_selections(role: str, email: str, from_date: date, to_date: date
     # if a session is both owned and delegated, the user's own row wins
     out = out.drop_duplicates(subset=["session_date", "slot_time", "batch_code"], keep="first")
     return out
+
+
+# ---------------------------------------------------------------------------
+# CROSS-VISIBILITY (new): within a Core AE's team, the Core AE and their
+# Extended AEs all SEE each other's selections. Only the person who made a
+# selection (owner_email) may change it.
+# ---------------------------------------------------------------------------
+def get_team_selections(core_ae_email: str, from_date: date, to_date: date) -> pd.DataFrame:
+    """
+    Every selection tied to this Core AE's team for the period, from BOTH
+    role tables. Returns one row per (date, slot, batch) with:
+        status, owner_email, owner_role
+    so the UI can show "claimed by X" and lock editing to the owner.
+    """
+    frames = []
+
+    # Core AE's own picks
+    core = get_selections_for_role("core_ae", core_ae_email, from_date, to_date)
+    if not core.empty:
+        core = core[["session_date", "slot_time", "batch_code", "status", "owner_email"]].copy()
+        core["owner_role"] = "core_ae"
+        frames.append(core)
+
+    # Extended AEs paired to this Core AE
+    ext_emails = extended_aes_for_core(core_ae_email)
+    for ext in ext_emails:
+        e = get_selections_for_role("extended_ae", ext, from_date, to_date)
+        if not e.empty:
+            e = e[["session_date", "slot_time", "batch_code", "status", "owner_email"]].copy()
+            e["owner_role"] = "extended_ae"
+            frames.append(e)
+
+    if not frames:
+        return pd.DataFrame(
+            columns=["session_date", "slot_time", "batch_code", "status", "owner_email", "owner_role"]
+        )
+
+    out = pd.concat(frames, ignore_index=True)
+    # a claimed status wins over Not Selected if two rows collide
+    rank = {"Confirmed": 3, "Selected": 2, "Choosing": 1, "Not Selected": 0}
+    out["_r"] = out["status"].map(lambda s: rank.get(s, 0))
+    out = out.sort_values("_r", ascending=False).drop_duplicates(
+        subset=["session_date", "slot_time", "batch_code"], keep="first"
+    ).drop(columns=["_r"])
+    return out
