@@ -276,6 +276,42 @@ def _css(t: dict, name: str = "light") -> str:
       div[data-testid="stMetricValue"] * {{ color:{t['text']} !important; }}
       div[data-testid="stMetricLabel"] * {{ color:{t['muted']} !important; font-size:.78rem; }}
 
+      /* colourful stat cards for the at-a-glance snapshot */
+      .stat-row {{
+        display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:8px 0 18px;
+      }}
+      .stat {{
+        border-radius:14px; padding:18px 20px; border:1px solid {t['border']};
+        background:{t['surface']}; position:relative; overflow:hidden;
+        transition:transform .12s ease, box-shadow .12s ease;
+      }}
+      .stat:hover {{ transform:translateY(-2px); box-shadow:{t['shadow']}; }}
+      .stat::before {{ content:""; position:absolute; left:0; top:0; bottom:0; width:4px; }}
+      .stat-total::before {{ background:{t['muted']}; }}
+      .stat-avail::before {{ background:{t['avail_border']}; }}
+      .stat-claim::before {{ background:{t['claim_border']}; }}
+      .stat-mine::before  {{ background:{t['accent']}; }}
+      .stat-num {{ font-size:1.9rem; font-weight:650; letter-spacing:-.03em; line-height:1; }}
+      .stat-lbl {{ font-size:.8rem; color:{t['muted']}; margin-top:6px; font-weight:500; }}
+      .stat-avail .stat-num {{ color:{t['avail_text']}; }}
+      .stat-claim .stat-num {{ color:{t['claim_text']}; }}
+      .stat-mine .stat-num  {{ color:{t['accent']}; }}
+      @media (max-width: 640px) {{ .stat-row {{ grid-template-columns:repeat(2,1fr); }} }}
+
+      /* help strip above the session table */
+      .help-strip {{
+        display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;
+        gap:10px; padding:11px 16px; margin-bottom:10px;
+        background:{t['accent_soft']}; border:1px solid {t['border']};
+        border-radius:12px; font-size:.84rem; color:{t['text']};
+      }}
+      .help-strip b {{ color:{t['text']}; font-weight:600; }}
+      .legend {{ display:flex; gap:8px; flex-wrap:wrap; }}
+      .lg {{ font-size:.74rem; font-weight:600; padding:2px 9px; border-radius:980px; }}
+      .lg-avail {{ background:{t['avail_border']}; color:{t['avail_text']}; }}
+      .lg-mine  {{ background:{t['accent']}; color:#fff; }}
+      .lg-lock  {{ background:{t['chip_bg']}; color:{t['muted']}; }}
+
       /* ---------- SESSION ROW ---------- */
       .sess-card {{
         border-radius:10px; padding:11px 14px; margin-bottom:7px;
@@ -992,12 +1028,26 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     total = len(df)
     claimed = int(df["Status"].isin(list(CLAIMED)).sum())
     mine = int(df["_owner"].apply(lambda o: bool(o) and o.lower() == user_email.lower()).sum())
+    available = total - claimed
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Sessions", f"{total:,}")
-    m2.metric("Claimed (team)", claimed)
-    m3.metric("Available", total - claimed)
-    m4.metric("Mine", mine)
+    # visual stat cards (friendlier than plain metrics)
+    st.markdown(
+        f"""<div class="stat-row">
+          <div class="stat stat-total">
+            <div class="stat-num">{total:,}</div><div class="stat-lbl">Sessions</div>
+          </div>
+          <div class="stat stat-avail">
+            <div class="stat-num">{available:,}</div><div class="stat-lbl">◷ Available</div>
+          </div>
+          <div class="stat stat-claim">
+            <div class="stat-num">{claimed:,}</div><div class="stat-lbl">✓ Claimed by team</div>
+          </div>
+          <div class="stat stat-mine">
+            <div class="stat-num">{mine:,}</div><div class="stat-lbl">★ Mine</div>
+          </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
     PER_PAGE = 50
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
@@ -1017,9 +1067,16 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     lo = (int(page) - 1) * PER_PAGE
     chunk = df.iloc[lo:lo + PER_PAGE].copy().reset_index(drop=True)
 
-    st.caption(
-        "Set **Status** on any row you own, then **Save changes**. "
-        "🔒 = claimed by a teammate (you can see it but not change it)."
+    st.markdown(
+        """<div class="help-strip">
+          <span><b>How to claim:</b> set a row's <b>Status</b>, then hit <b>Save changes</b>.</span>
+          <span class="legend">
+            <span class="lg lg-avail">◷ Available</span>
+            <span class="lg lg-mine">★ Mine</span>
+            <span class="lg lg-lock">🔒 Teammate's</span>
+          </span>
+        </div>""",
+        unsafe_allow_html=True,
     )
 
     view_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Claimed by", "Status"]
