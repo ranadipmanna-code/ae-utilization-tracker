@@ -498,24 +498,25 @@ def dashboard():
         unsafe_allow_html=True,
     )
 
-    # Evaluation removed (change #3) — will return later via a Google Sheets form.
-    tabs = ["📋  Sessions", "🎯  Mock Interviews"]
+    # Evaluation removed (change #3). Tabs differ per role.
     if role in ("core_ae", "admin"):
-        tabs.insert(1, "👥  My Extended AE Team")
-        tabs.insert(2, "📊  Weekly Summary")
-    made = st.tabs(tabs)
-
-    with made[0]:
-        _sessions_tab(user, role)
-    if role in ("core_ae", "admin"):
+        made = st.tabs(["📋  Sessions", "👥  My Extended AE Team",
+                        "📊  Weekly Summary", "🎯  Mock Interviews"])
+        with made[0]:
+            _sessions_tab(user, role)
         with made[1]:
             _rollup_tab(user, role)
         with made[2]:
             _summary_tab(user, role)
         with made[3]:
             _mock_tab()
-    else:
+    else:  # extended_ae
+        made = st.tabs(["📋  Sessions", "🧭  My Alignment", "🎯  Mock Interviews"])
+        with made[0]:
+            _sessions_tab(user, role)
         with made[1]:
+            _my_core_tab(user)
+        with made[2]:
             _mock_tab()
 
 
@@ -567,9 +568,84 @@ def _rollup_tab(user, role):
         st.info("No Core AE mapping found.")
         return
     core_ae_email = st.selectbox("Core AE", core_options, key="rollup_core")
+
+    # ---- TEAM ROSTER (structure, always shown) ----
+    st.markdown("### 👥 Team Roster")
+
+    ext_aes = db.extended_aes_for_core(core_ae_email)
+    faculty = db.faculty_emails_for_core(core_ae_email)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Extended AEs** ({len(ext_aes)})")
+        if ext_aes:
+            roles_df = db.get_user_roles()
+            name_by = {}
+            if not roles_df.empty:
+                name_by = dict(zip(roles_df["email"].str.lower(), roles_df["name"]))
+            for e in ext_aes:
+                nm = name_by.get(e.lower(), e.split("@")[0])
+                st.markdown(f"- {nm}  \n  <span style='opacity:.6;font-size:.8rem'>{e}</span>",
+                            unsafe_allow_html=True)
+        else:
+            st.caption("No Extended AEs paired in ae_extae.")
+    with c2:
+        st.markdown(f"**Trainers** ({len(faculty)})")
+        if faculty:
+            for t in sorted(faculty)[:30]:
+                st.markdown(f"- {t.split('@')[0]}")
+            if len(faculty) > 30:
+                st.caption(f"…and {len(faculty) - 30} more")
+        else:
+            st.caption("No trainers mapped in core_ae_faculty_map.")
+
+    st.divider()
+
+    # ---- ACTIVITY (selections this week) ----
     ws, we = _week_bounds_now()
-    st.caption(f"Week of {ws} → {we}")
+    st.markdown(f"### 📋 Team Selections — week of {ws} → {we}")
     _team_rollup(core_ae_email, ws, we)
+
+
+def _my_core_tab(user):
+    """For an Extended AE: show which Core AE(s) they're aligned with + teammates."""
+    st.markdown("### 🧭 My Alignment")
+    my_core = db.core_ae_for_extended(user["email"])
+    roles_df = db.get_user_roles()
+    name_by = {}
+    if not roles_df.empty:
+        name_by = dict(zip(roles_df["email"].str.lower(), roles_df["name"]))
+
+    if not my_core:
+        st.info("You're not paired to a Core AE yet in the ae_extae table.")
+        return
+
+    core_name = name_by.get(my_core.lower(), my_core.split("@")[0])
+    st.markdown(
+        f"You report to **{core_name}**  \n"
+        f"<span style='opacity:.6;font-size:.85rem'>{my_core}</span>",
+        unsafe_allow_html=True,
+    )
+
+    # teammates: other Extended AEs under the same Core AE
+    teammates = [e for e in db.extended_aes_for_core(my_core) if e.lower() != user["email"].lower()]
+    st.markdown(f"**Teammates under {core_name}** ({len(teammates)})")
+    if teammates:
+        for e in teammates:
+            nm = name_by.get(e.lower(), e.split("@")[0])
+            st.markdown(f"- {nm}  <span style='opacity:.5;font-size:.8rem'>({e})</span>",
+                        unsafe_allow_html=True)
+    else:
+        st.caption("You're the only Extended AE under this Core AE.")
+
+    # the trainers this team observes
+    faculty = db.faculty_emails_for_core(my_core)
+    st.divider()
+    st.markdown(f"**Trainers your team observes** ({len(faculty)})")
+    for t in sorted(faculty)[:40]:
+        st.markdown(f"- {t.split('@')[0]}")
+    if len(faculty) > 40:
+        st.caption(f"…and {len(faculty) - 40} more")
 
 
 def _mock_tab():
