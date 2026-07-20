@@ -34,25 +34,27 @@ st.set_page_config(page_title="AE Utilization Tracker", layout="wide", page_icon
 #              orange/amber accent, higher-contrast cards.
 # ---------------------------------------------------------------------------
 THEMES = {
+    # Clean & minimal — Apple/Linear inspired. Cool neutral grays, generous
+    # whitespace, a single refined indigo accent, whisper-soft shadows.
     "light": {
-        "bg": "#f5f5f7", "surface": "#ffffff", "surface_2": "#fafafa",
-        "text": "#1d1d1f", "muted": "#6e6e73", "border": "#e5e5ea",
-        "accent": "#0071e3", "accent_soft": "#eaf3fe",
-        "avail_bg": "#fffdf5", "avail_border": "#f5c518", "avail_text": "#8a6100",
-        "claim_bg": "#f2fbf5", "claim_border": "#30c85f", "claim_text": "#0b5f28",
-        "done_bg": "#f3f7ff", "done_border": "#0071e3",
-        "chip_bg": "#f5f5f7", "chip_text": "#4a4a4f",
-        "shadow": "0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06)",
+        "bg": "#fbfbfc", "surface": "#ffffff", "surface_2": "#f6f7f9",
+        "text": "#16181d", "muted": "#6b7280", "border": "#ececef",
+        "accent": "#5e6ad2", "accent_soft": "#eef0fb",
+        "avail_bg": "#fffdf6", "avail_border": "#e6b32e", "avail_text": "#8a6100",
+        "claim_bg": "#f2fbf5", "claim_border": "#38b26a", "claim_text": "#0b5f28",
+        "done_bg": "#f4f5fd", "done_border": "#5e6ad2",
+        "chip_bg": "#f2f3f5", "chip_text": "#5c6069",
+        "shadow": "0 1px 2px rgba(16,18,29,.04), 0 4px 16px rgba(16,18,29,.05)",
     },
     "dark": {
-        "bg": "#0b1626", "surface": "#14243a", "surface_2": "#1a2c46",
-        "text": "#eef3f9", "muted": "#8ba0b8", "border": "#243c59",
-        "accent": "#f7941d", "accent_soft": "#2e2312",
-        "avail_bg": "#2b2210", "avail_border": "#f7941d", "avail_text": "#ffd79a",
-        "claim_bg": "#0d2b23", "claim_border": "#2ec27e", "claim_text": "#7fe6b6",
-        "done_bg": "#132a3f", "done_border": "#4da3ff",
-        "chip_bg": "#1e3252", "chip_text": "#bccbdd",
-        "shadow": "0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35)",
+        "bg": "#0c0d10", "surface": "#161719", "surface_2": "#1c1d21",
+        "text": "#f4f5f6", "muted": "#8a8f98", "border": "#26272b",
+        "accent": "#7c86e8", "accent_soft": "#1e1f2e",
+        "avail_bg": "#211d10", "avail_border": "#e6b32e", "avail_text": "#f5d78a",
+        "claim_bg": "#10241a", "claim_border": "#3fb872", "claim_text": "#8fe6b6",
+        "done_bg": "#191b28", "done_border": "#7c86e8",
+        "chip_bg": "#232428", "chip_text": "#b6bac2",
+        "shadow": "0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.5)",
     },
 }
 
@@ -66,19 +68,25 @@ def _css(t: dict, name: str = "light") -> str:
          table below) even though every color here is set explicitly —
          which is why the table could render black under the Light skin. */
       html {{ color-scheme: {name}; }}
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&display=swap');
       html, body, [data-testid="stAppViewContainer"], .stApp {{
         background:{t['bg']} !important; color:{t['text']} !important;
-        font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+        font-family:"Inter","Inter var",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         -webkit-font-smoothing:antialiased;
+        -moz-osx-font-smoothing:grayscale;
+        letter-spacing:-0.006em;
       }}
       [data-testid="stHeader"] {{ background:transparent !important; }}
-      .block-container {{ padding-top:1.6rem; padding-bottom:4rem; max-width:1180px; }}
-      h1 {{ font-weight:700; letter-spacing:-.028em; font-size:2rem; margin-bottom:0; }}
-      h2,h3 {{ font-weight:600; letter-spacing:-.015em; }}
+      .block-container {{ padding-top:2.2rem; padding-bottom:5rem; max-width:1120px; }}
+      h1 {{ font-weight:600; letter-spacing:-.03em; font-size:1.9rem; margin-bottom:0; line-height:1.15; }}
+      h2 {{ font-weight:600; letter-spacing:-.02em; font-size:1.35rem; }}
+      h3 {{ font-weight:600; letter-spacing:-.015em; font-size:1.1rem; }}
       p,span,label,div,li {{ color:{t['text']}; }}
       [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {{
-        color:{t['muted']} !important;
+        color:{t['muted']} !important; font-size:.83rem;
       }}
+      /* a little more breathing room between stacked elements */
+      [data-testid="stVerticalBlock"] > div {{ gap:.15rem; }}
 
       /* ---------- SIDEBAR ---------- */
       [data-testid="stSidebar"] {{
@@ -145,29 +153,45 @@ def _css(t: dict, name: str = "light") -> str:
       }}
 
       /* ---------- POPOVERS / MENUS / CALENDAR ---------- */
-      div[data-baseweb="popover"], div[data-baseweb="popover"] > div,
+      /* Force the ENTIRE dropdown popover light — every nested element.
+         The trainer/batch selectbox menus were rendering on a dark base. */
+      div[data-baseweb="popover"],
+      div[data-baseweb="popover"] *,
+      div[data-baseweb="popover"] > div,
+      div[data-baseweb="popover"] > div > div,
       ul[data-baseweb="menu"], div[data-baseweb="menu"],
+      ul[data-baseweb="menu"] *, div[data-baseweb="menu"] * {{
+        background-color:{t['surface']} !important;
+        color:{t['text']} !important;
+      }}
+      div[data-baseweb="popover"] > div {{
+        border:1px solid {t['border']} !important;
+        border-radius:12px !important; box-shadow:{t['shadow']} !important;
+        overflow:hidden;
+      }}
       div[data-baseweb="calendar"], div[data-baseweb="datepicker"] {{
         background:{t['surface']} !important; border:1px solid {t['border']} !important;
         border-radius:12px !important; box-shadow:{t['shadow']} !important;
       }}
-      /* the scrollable list container itself (this was rendering black) */
-      div[data-baseweb="popover"] ul, div[data-baseweb="popover"] div[role="listbox"],
       ul[role="listbox"], div[role="listbox"] {{
         background:{t['surface']} !important;
       }}
-      li[role="option"], div[role="option"], div[data-baseweb="calendar"] * {{
-        background:{t['surface']} !important; color:{t['text']} !important; font-size:.9rem;
+      li[role="option"], div[role="option"] {{
+        background:{t['surface']} !important; color:{t['text']} !important;
+        font-size:.9rem; padding:9px 14px !important;
       }}
       li[role="option"] div, li[role="option"] span {{
         background:transparent !important; color:{t['text']} !important;
       }}
-      li[role="option"] {{ padding:9px 14px !important; }}
-      li[role="option"]:hover, li[aria-selected="true"],
-      div[aria-selected="true"] {{
+      /* hover + selected get the accent tint (not black) */
+      li[role="option"]:hover, div[role="option"]:hover,
+      li[aria-selected="true"], div[aria-selected="true"] {{
         background:{t['accent_soft']} !important; color:{t['accent']} !important;
       }}
-      li[aria-selected="true"] *, li[role="option"]:hover * {{ color:{t['accent']} !important; }}
+      li[aria-selected="true"] *, li[role="option"]:hover *,
+      div[aria-selected="true"] *, div[role="option"]:hover * {{
+        background:transparent !important; color:{t['accent']} !important;
+      }}
 
       /* ---------- CALENDAR internals (kill the black empty cells) ---------- */
       div[data-baseweb="calendar"], div[data-baseweb="calendar"] > div,
@@ -322,6 +346,26 @@ def _css(t: dict, name: str = "light") -> str:
       .stDataFrame, [data-testid="stDataFrame"] {{
         border:1px solid {t['border']}; border-radius:10px; overflow:hidden;
       }}
+      /* Force the editable grid (data_editor) to light in light mode.
+         glide-data-grid uses a canvas + these CSS vars. */
+      [data-testid="stDataFrame"], [data-testid="stDataEditor"],
+      .stDataFrame, .stDataEditor {{
+        --gdg-bg-cell:{t['surface']};
+        --gdg-bg-cell-medium:{t['surface_2']};
+        --gdg-bg-header:{t['surface_2']};
+        --gdg-bg-header-hovered:{t['chip_bg']};
+        --gdg-bg-header-has-focus:{t['chip_bg']};
+        --gdg-text-dark:{t['text']};
+        --gdg-text-medium:{t['muted']};
+        --gdg-text-light:{t['muted']};
+        --gdg-text-header:{t['muted']};
+        --gdg-border-color:{t['border']};
+        --gdg-horizontal-border-color:{t['border']};
+        --gdg-accent-color:{t['accent']};
+        --gdg-accent-light:{t['accent_soft']};
+        --gdg-bg-bubble:{t['surface']};
+      }}
+      [data-testid="stDataEditor"] canvas {{ background:{t['surface']} !important; }}
       .sess-table-wrap {{
         border:1px solid {t['border']}; border-radius:12px; overflow:hidden;
         margin-bottom:14px; color-scheme:{name}; forced-color-adjust:none;
