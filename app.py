@@ -194,31 +194,33 @@ def _css(t: dict, name: str = "light") -> str:
       }}
 
       /* ---------- CALENDAR internals (kill the black empty cells) ---------- */
-      div[data-baseweb="calendar"], div[data-baseweb="calendar"] > div,
-      div[data-baseweb="calendar"] div[role="grid"],
-      div[data-baseweb="calendar"] div[role="row"],
-      div[data-baseweb="calendar"] div[role="gridcell"],
-      div[data-baseweb="calendar"] [class*="Month"],
-      div[data-baseweb="calendar"] [class*="Week"],
-      div[data-baseweb="calendar"] [class*="Day"],
+      /* catch-all: EVERY element inside the calendar popover gets a light bg,
+         including the empty out-of-month padding cells that render black. */
+      div[data-baseweb="calendar"],
+      div[data-baseweb="calendar"] *,
+      div[data-baseweb="datepicker"],
       div[data-baseweb="datepicker"] * {{
         background-color:{t['surface']} !important;
         color:{t['text']} !important;
         border-color:{t['border']} !important;
       }}
-      /* selected / hovered day */
-      div[data-baseweb="calendar"] div[aria-selected="true"],
-      div[data-baseweb="calendar"] [class*="Day"][aria-selected="true"] {{
+      /* selected day */
+      div[data-baseweb="calendar"] [aria-selected="true"],
+      div[data-baseweb="calendar"] [aria-selected="true"] * {{
         background-color:{t['accent']} !important; color:#fff !important;
-        border-radius:50% !important;
+        border-radius:8px !important;
       }}
+      /* hovered day */
+      div[data-baseweb="calendar"] [role="gridcell"]:hover,
       div[data-baseweb="calendar"] [class*="Day"]:hover {{
         background-color:{t['accent_soft']} !important; color:{t['accent']} !important;
-        border-radius:50% !important;
+        border-radius:8px !important;
       }}
+      /* disabled / out-of-range days: faded, not black */
       div[data-baseweb="calendar"] [aria-disabled="true"],
-      div[data-baseweb="calendar"] [class*="Day"][aria-disabled="true"] {{
-        color:{t['muted']} !important; opacity:.35;
+      div[data-baseweb="calendar"] [aria-disabled="true"] * {{
+        background-color:{t['surface']} !important;
+        color:{t['muted']} !important; opacity:.4;
       }}
 
       /* ---------- NUMBER INPUT stepper (-/+ were rendering dark) ---------- */
