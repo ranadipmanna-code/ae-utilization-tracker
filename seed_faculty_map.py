@@ -35,6 +35,17 @@ FACULTY_PER_ROW = 5
 
 NA = {"", "#n/a", "n/a", "none", "null"}
 
+# The alignment file lists some Extended AEs in the trainer column (they report
+# to a Core AE too). Those must NOT become "faculty". Exclude the known
+# Extended AEs so core_ae_faculty_map holds real trainers only.
+EXTENDED_AES = {
+    "priyanka.roy@anudip.org", "shanmukh.adala@anudip.org", "kundan.sinha@anudip.org",
+    "sabreena.ramzan@anudip.org", "divya.ns@anudip.org", "pallav.punit@anudip.org",
+    "anirudhha.sharma@anudip.org", "grk.mahalakshmi@anudip.org", "dipankar.biswas@anudip.org",
+    "aarti.kumari@anudip.org", "pranjya.das@anudip.org", "pulak.bhattacharya@anudip.org",
+    "priyanka.nongkhlaw@anudip.org",
+}
+
 
 def eng():
     cfg = tomllib.load(open(SECRETS, "rb"))["appdb"]
@@ -59,6 +70,9 @@ def main():
         if not te:
             continue
         te = str(te).strip().lower()
+        # skip Extended AEs — they aren't faculty even if listed as trainers
+        if te in EXTENDED_AES:
+            continue
         core_norm = str(core).strip().lower() if core else ""
         if core_norm in NA:
             unmapped.append(te)
