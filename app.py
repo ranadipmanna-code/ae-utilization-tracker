@@ -856,7 +856,7 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
         tag = "CoreAE" if r["_ownrole"] == "core_ae" else "ExtAE"
         return f"🔒 {who} ({tag})"
 
-    df["Claimed by"] = df.apply(_claimed_by, axis=1)
+    df["Claimed by"] = df.apply(_claimed_by, axis=1).replace("", "—")
     df["Trainer"] = (df["f_name"].fillna("") + " " + df["l_name"].fillna("")).str.strip()
     df["Date"] = pd.to_datetime(df["_date"]).dt.strftime("%a %d %b")
     df["Time"] = df["slot_time"]
@@ -905,20 +905,20 @@ def _sessions_table(sessions, core_ae_email, date_from, date_to, role, user_emai
     view_cols = ["Trainer", "Date", "Time", "Duration", "Batch", "Program", "Claimed by", "Status"]
     editable_view = chunk[view_cols].copy()
 
-    # rows claimed by someone else must not be edited — if the whole page has a
-    # mix, we disable editing per-row by blanking the Status options isn't
-    # possible in data_editor, so we validate on save and reject locked rows.
+    # Status is editable inline. Rows claimed by a teammate are validated and
+    # rejected on save (data_editor can't disable a single cell).
     edited = st.data_editor(
         editable_view,
         key=f"editor_{page}",
         use_container_width=True,
         hide_index=True,
-        height=min(600, 46 + 35 * len(editable_view)),
+        height=min(600, 46 + 36 * len(editable_view)),
         disabled=[c for c in view_cols if c != "Status"] if can_select else view_cols,
         column_config={
             "Status": st.column_config.SelectboxColumn(
                 "Status", options=STATUS_OPTIONS, required=True, width="small"
             ),
+            "Trainer": st.column_config.TextColumn("Trainer", width="medium"),
             "Program": st.column_config.TextColumn("Program", width="medium"),
             "Claimed by": st.column_config.TextColumn("Claimed by", width="small"),
         },
